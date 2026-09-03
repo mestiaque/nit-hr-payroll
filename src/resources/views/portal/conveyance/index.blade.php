@@ -89,12 +89,13 @@
                 <label class="form-label">Travel By</label>
                 <select name="travel_by" class="form-control" required>
                     <option value="">-- Select --</option>
+                    <option value="Rikshaw">Rikshaw</option>
                     <option value="Bus">Bus</option>
-                    <option value="CNG">CNG</option>
-                    <option value="Rickshaw">Rickshaw</option>
-                    <option value="Car">Car</option>
-                    <option value="Train">Train</option>
-                    <option value="Other">Other</option>
+                    <option value="Ride Sharing: Car">Ride Sharing: Car</option>
+                    <option value="Ride Sharing: Bike">Ride Sharing: Bike</option>
+                    <option value="Personal Vehicle">Personal Vehicle</option>
+                    <option value="Metro Rail">Metro Rail</option>
+                    <option value="Bus &amp; Rikshaw">Bus &amp; Rikshaw</option>
                 </select>
             </div>
             <div class="form-group">

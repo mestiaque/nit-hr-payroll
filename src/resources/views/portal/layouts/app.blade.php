@@ -559,7 +559,7 @@
             <aside class="sidebar" id="sidebar">
                 <div class="sidebar-brand">
                     <img src="{{ asset(general()->logo()) }}" alt="logo" class="sidebar-logo">
-                    <span>Employee Portal</span>
+                    <span>{{ general()->title ?? 'EMPLOYEE'}}</span>
                 </div>
                 <nav class="sidebar-nav">
                     <a href="{{ route('employee-portal.dashboard') }}" class="{{ request()->routeIs('employee-portal.dashboard') ? 'active' : '' }}">
