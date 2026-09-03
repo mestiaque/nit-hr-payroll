@@ -1,0 +1,1019 @@
+<?php
+
+namespace ME\Hr\Services;
+
+use ME\Hr\Models\HrEmployeeLeave as Leave;
+use ME\Hr\Models\HrDesignation as Designation;
+use ME\Hr\Models\HrEmployeeSalarySnapshot;
+use ME\Hr\Models\HrLock;
+use ME\Hr\Services\EmployeeAttendanceService;
+
+class SalaryReportService
+{
+    /**
+     * The compliance-mode base used wherever a percentage/per-day rate needs a salary
+     * figure to work from — Actual (factory_no 0/null) uses Gross, Comp-1/Comp-2
+     * (1 or 2) use Basic. Applied identically to tax %, absent-day deduction, etc.,
+     * so this single rule lives in one place instead of being copy-pasted per site.
+     */
+    private static function complianceBase(int $factoryNo, float $basic, float $gross): float
+    {
+        return ($factoryNo === 1 || $factoryNo === 2) ? $basic : $gross;
+    }
+
+    /**
+     * Get all salary-related data for a single employee for a date range.
+     *
+     * Pass $employeeDataFn (from HrOptionsService::getOptionsForEmployee()) so the
+     * expensive options query runs only once per page, not once per employee.
+     */
+    public static function getEmployeeSalaryData(
+        $emp,
+        string $from,
+        string $to,
+        $request = null,
+        ?callable $employeeDataFn = null
+    ): array {
+        // A locked (salary-approved) period is frozen to whatever was true at lock
+        // time — no matter what attendance/increment/salary_info changes happen
+        // afterward, the report must keep showing the locked snapshot, not a live
+        // recalculation. Only applies when the period is a single calendar month.
+        $toDate = \Carbon\Carbon::parse($to);
+        if (\Carbon\Carbon::parse($from)->isSameMonth($toDate)) {
+            $snapshot = HrEmployeeSalarySnapshot::where('employee_id', $emp->id)
+                ->where('lock_year', $toDate->year)
+                ->where('lock_month', $toDate->month)
+                ->first();
+            if ($snapshot
+                && HrLock::isLocked('salary', $toDate->year, $toDate->month, $emp->department_id)
+                && is_array($snapshot->raw_data)
+            ) {
+                return $snapshot->raw_data;
+            }
+        }
+
+        if ($employeeDataFn === null) {
+            $employeeDataFn = HrOptionsService::getOptionsForEmployee();
+        }
+
+        $factoryNo    = (int) (hr_factory('factory_no') ?? 0);
+        $employeeData = $employeeDataFn($emp, $request, null, null, null, null);
+        $salaryReport = $employeeData['getSalaryReport']($from, $to);
+        $earnDeductSummary = isset($employeeData['getEarningsDeductionsSummary'])
+            && is_callable($employeeData['getEarningsDeductionsSummary'])
+            ? $employeeData['getEarningsDeductionsSummary']($from, $to)
+            : [];
+
+        $sal    = hr_employee_salary($emp);
+        $sal    = \ME\Hr\Models\HrEmployeeSalaryIncrement::applyIncrementOverride($sal, $emp->id);
+        $otRate = (float) ($employeeData['salary']['ot_rate'] ?? $sal['ot_rate'] ?? 0);
+
+        $attendancePack = EmployeeAttendanceService::getEmployeeAttendanceByDate($emp->id, $from, $to);
+        $summary = $attendancePack['summary'] ?? [];
+        $leave   = $attendancePack['leave']   ?? [];
+
+        // Attendance-based OT (worked overtime hours x rate) and the manual OT(+/-)
+        // adjustment from Earnings & Deductions (a separate bonus/penalty, unrelated
+        // to attendance) are two independent things and must both apply — the manual
+        // adjustment is already folded into $salaryReport['total_earn']/['total_deduct']/['net']
+        // by getSalaryReport(), so attendance OT is simply added on top, not swapped in.
+        $otHours  = ($factoryNo === 1 || $factoryNo === 2)
+            ? (float) ($summary['totalComplianceOt'] ?? 0)
+            : (float) ($summary['totalOt'] ?? 0);
+        $otAmount = round($otHours * $otRate, 2);
+
+        // totalAttendance excludes weekend/holiday days (unlike totalPresentAll, which
+        // also counts anyone who clocked in on a holiday) — the report shows Work Day
+        // and Holy Day as separate, non-overlapping columns, so they must not double-count
+        // the same date.
+        $present = (int) ($summary['totalAttendance'] ?? 0);
+        $absent  = (int) ($summary['totalAbsent'] ?? 0);
+
+        $leaveDays          = (int) ($summary['totalLeave'] ?? 0);
+        $hasNoAbsentOrLeave = $absent === 0 && $leaveDays === 0;
+
+        // Attendance bonus: host-app salary → employee salary_info (designation-synced) → designation → 0
+        $empSi = $emp->salaryInfo;
+        $designation = $emp->designation ?? ($emp->designation_id ? Designation::find($emp->designation_id) : null);
+        $attendanceBonusBase = ($factoryNo === 1 || $factoryNo === 2)
+            ? (float) ($sal['attendance_bonus_com']
+                ?? $empSi?->attendance_bonus_com
+                ?? $designation?->attendance_bonus_com
+                ?? 0)
+            : (float) ($sal['attendance_bonus']
+                ?? $empSi?->attendance_bonus
+                ?? $designation?->attendance_bonus
+                ?? 0);
+
+        $attBonus = (float) (
+            $salaryReport['attendance_bonus']
+            ?? $salaryReport['att_bonus']
+            ?? $earnDeductSummary['attendanceBonus']
+            ?? $earnDeductSummary['attendance_bonus']
+            ?? ($hasNoAbsentOrLeave ? $attendanceBonusBase : 0)
+        );
+        $allowOther = (float) (
+            $earnDeductSummary['otherEarn']
+            ?? $earnDeductSummary['other_earn']
+            ?? $earnDeductSummary['others_earn']
+            ?? $earnDeductSummary['otherAllowance']
+            ?? $earnDeductSummary['other_allowance']
+            ?? 0
+        );
+        $arrear = (float) (
+            $salaryReport['arrear']
+            ?? $earnDeductSummary['arrear']
+            ?? $earnDeductSummary['salary_arrear']
+            ?? 0
+        );
+        $deductAbsent = (float) ($summary['deductAbsent'] ?? $salaryReport['absent_deduct'] ?? 0);
+        $loan         = (float) ($earnDeductSummary['advanceIou'] ?? $earnDeductSummary['loan'] ?? 0);
+        $deductFood   = (float) ($earnDeductSummary['foodDeduct'] ?? $earnDeductSummary['food_deduct'] ?? 0);
+        $mobile       = (float) ($earnDeductSummary['mobile'] ?? $earnDeductSummary['mobile_deduct'] ?? 0);
+        $jr           = (float) ($earnDeductSummary['jr'] ?? $earnDeductSummary['join_resign'] ?? 0);
+
+        // Stamp: fixed amount configured on the active factory.
+        $stamp = (float) (hr_factory('stamp_amount') ?? 0);
+
+        // Tax: employee's salary_info.tax, either a flat amount or a % of salary.
+        // The % base follows factory compliance mode: Actual (0/null) -> Gross,
+        // Comp-1/Comp-2 (1/2) -> Basic.
+        $taxRaw    = (float) ($empSi?->tax ?? 0);
+        $taxCalcBy = (string) ($empSi?->tax_calculate_by ?? 'amount');
+        $taxBase   = self::complianceBase(
+            $factoryNo,
+            (float) ($salaryReport['basic'] ?? $sal['basic'] ?? 0),
+            (float) ($salaryReport['gross'] ?? $sal['gross'] ?? 0)
+        );
+        $tax       = $taxCalcBy === 'percent' ? round($taxBase * ($taxRaw / 100), 2) : $taxRaw;
+
+        $deductOther  = (float) (
+            $earnDeductSummary['otherDeduct']
+            ?? $earnDeductSummary['other_deduct']
+            ?? $earnDeductSummary['others_deduct']
+            ?? 0
+        );
+
+        $knownDeduct = $deductAbsent + $loan + $deductFood + $mobile + $jr + $stamp + $tax;
+        if ($deductOther <= 0 && $knownDeduct < (float) ($salaryReport['total_deduct'] ?? 0)) {
+            $deductOther = (float) ($salaryReport['total_deduct'] ?? 0) - $knownDeduct;
+        }
+
+        // Per-LeaveInfo code counts from Leave records within the period — approved
+        // only, consistent with EmployeeAttendanceService's own leave-day detection; a
+        // still-pending request shouldn't show up as a taken leave day here either.
+        $leavesByCode = [];
+        $empLeaves = Leave::with('leaveType')
+            ->where('employee_id', $emp->id)
+            ->where('status', 'approved')
+            ->whereDate('leave_from', '<=', $to)
+            ->whereDate('leave_to', '>=', $from)
+            ->get();
+        foreach ($empLeaves as $lv) {
+            $code = strtoupper((string) ($lv->leaveType->code ?? ''));
+            if (!$code) continue;
+            $lvFrom = \Carbon\Carbon::parse(max($lv->leave_from, $from));
+            $lvTo   = \Carbon\Carbon::parse(min($lv->leave_to, $to));
+            $days   = max(0, (int) $lvFrom->diffInDays($lvTo) + 1);
+            $leavesByCode[$code] = ($leavesByCode[$code] ?? 0) + $days;
+        }
+
+        // Extra facility = Car & Fuel + Phone & Internet + Extra Facility, each already
+        // resolved employee-salary_info-first, falling back to designation, by hr_employee_salary().
+        $extraFacility = (float) ($sal['car_fuel'] ?? 0)
+            + (float) ($sal['phone_internet'] ?? 0)
+            + (float) ($sal['extra_facility'] ?? 0);
+
+        // Meal allowances (tiffin / night / dinner) from attendance pack
+        $meal        = $attendancePack['meal'] ?? [];
+        $tiffinTotal = (float) ($meal['tiffin_total'] ?? 0);
+        $nightTotal  = (float) ($meal['night_total']  ?? 0);
+        $dinnerTotal = (float) ($meal['dinner_total']  ?? 0);
+        $mealTotal   = $tiffinTotal + $nightTotal + $dinnerTotal;
+
+        // Days within [from, to] the employee was actually employed — excludes
+        // 'not_employed' rows (post-exit, pre-join, or future — see
+        // EmployeeAttendanceService::getEmployeeAttendanceByDate()). Used by
+        // buildSalarySheetData() to prorate pay to whatever window is actually
+        // relevant for this employee (a mid-period join/exit, or a still-in-progress
+        // period), instead of assuming the full calendar month applies to everyone.
+        $employedDays = collect($attendancePack['attendance'] ?? [])
+            ->filter(fn ($row) => ($row['status_key'] ?? null) !== 'not_employed')
+            ->count();
+
+        return [
+            'gross'                => (float) ($salaryReport['gross'] ?? $sal['gross'] ?? 0),
+            'basic'                => (float) ($salaryReport['basic'] ?? $sal['basic'] ?? 0),
+            'house_rent'           => (float) ($sal['house'] ?? 0),
+            'medical'              => (float) ($sal['medical'] ?? 0),
+            'transport'            => (float) ($sal['transport'] ?? 0),
+            'food_allow'           => (float) ($sal['food'] ?? 0),
+            'total_earn'           => (float) ($salaryReport['total_earn'] ?? 0) + $otAmount + $extraFacility,
+            'total_deduct'         => (float) ($salaryReport['total_deduct'] ?? 0) + $tax + $stamp,
+            'net'                  => (float) ($salaryReport['net'] ?? 0) + $otAmount + $extraFacility - $tax - $stamp,
+            'ot'                   => $otAmount,
+            'ot_hours'             => $otHours,
+            'ot_rate'              => $otRate,
+            'present'              => $present,
+            'absent'               => $absent,
+            'leave'                => $leaveDays,
+            'wh'                   => (int) ($leave['weekly']   ?? 0),
+            'fh'                   => (int) ($leave['festival'] ?? 0),
+            'fl'                   => (int) ($leave['holiday_festival'] ?? 0),
+            'gl'                   => (int) ($leave['holiday_general']  ?? 0),
+            'leaves_by_code'       => $leavesByCode,
+            'att_bonus'            => $attBonus,
+            'allow_other'          => $allowOther,
+            'arrear'               => $arrear,
+            'deduct_absent'        => $deductAbsent,
+            'deduct_other'         => $deductOther,
+            'loan'                 => $loan,
+            'deduct_food'          => $deductFood,
+            'mobile'               => $mobile,
+            'jr'                   => $jr,
+            'tax'                  => $tax,
+            'stamp'                => $stamp,
+            'wph_days'             => (int)   ($summary['totalWeekendToRegularDays']   ?? 0),
+            'wph_amount'           => (float) ($summary['totalWeekendToRegularAmount'] ?? 0),
+            'extra_facility'       => $extraFacility,
+            'tiffin_total'         => $tiffinTotal,
+            'night_total'          => $nightTotal,
+            'dinner_total'         => $dinnerTotal,
+            'meal_total'           => round($mealTotal, 2),
+            'tiffin_eligible_days' => (int) ($meal['tiffin_eligible_days'] ?? 0),
+            'night_eligible_days'  => (int) ($meal['night_eligible_days']  ?? 0),
+            'dinner_eligible_days' => (int) ($meal['dinner_eligible_days']  ?? 0),
+            'employed_days'        => $employedDays,
+        ];
+    }
+
+    /**
+     * Aggregated department/section totals for the Wages & Salary Summary report.
+     */
+    public static function buildWagesSummaryData($employees, string $from, string $to, $request, string $groupBy = 'department'): array
+    {
+        $employeeDataFn = HrOptionsService::getOptionsForEmployee();
+        $byDept = $employees->groupBy('department_id');
+        $factoryNo = (int) (hr_factory('factory_no') ?? 0);
+        $deductionMonthDays = 30;
+
+        $keys = ['emp', 'basic', 'house_rent', 'medical', 'transport', 'ot', 'gross', 'earn', 'deduct', 'net', 'present', 'absent', 'wh', 'fl', 'gl'];
+        $grandTotals = array_fill_keys($keys, 0);
+        $summaryData = [];
+
+        foreach ($byDept as $deptId => $deptEmps) {
+            foreach ($deptEmps->groupBy('section_id') as $secId => $secEmps) {
+                $row = array_fill_keys($keys, 0);
+                $row['dept_id'] = $deptId;
+                $row['sec_id'] = $secId;
+                $row['emp'] = $secEmps->count();
+
+                foreach ($secEmps as $emp) {
+                    $sd = self::getEmployeeSalaryData($emp, $from, $to, $request, $employeeDataFn);
+
+                    $presentDays = (int) ($sd['present'] ?? 0);
+                    $absentDays  = (int) ($sd['absent']  ?? 0);
+
+                    // getEmployeeSalaryData()'s own 'net'/'total_deduct' never apply an
+                    // attendance-based absent deduction at all — that's computed here
+                    // unconditionally (not gated behind a "looks fully paid" guess) so an
+                    // employee with absent days is never summed as paid in full.
+                    $absentBase   = self::complianceBase($factoryNo, (float) $sd['basic'], (float) $sd['gross']);
+                    $deductAbsent = $absentDays > 0 ? round(($absentBase / $deductionMonthDays) * $absentDays, 2) : 0;
+
+                    $deductAmount = (float) ($sd['total_deduct'] ?? 0) + $deductAbsent;
+                    $netAmount    = max(0, (float) ($sd['gross'] ?? 0) + (float) ($sd['total_earn'] ?? 0) - $deductAmount);
+
+                    $row['basic'] += $sd['basic'];
+                    $row['house_rent'] += $sd['house_rent'];
+                    $row['medical'] += $sd['medical'];
+                    $row['transport'] += $sd['transport'];
+                    $row['ot'] += $sd['ot'];
+                    $row['gross'] += $sd['gross'];
+                    $row['earn'] += $sd['total_earn'];
+                    $row['deduct'] += $deductAmount;
+                    $row['net'] += $netAmount;
+                    $row['present'] += $presentDays;
+                    $row['absent'] += $absentDays;
+                    $row['wh'] += $sd['wh'] ?? 0;
+                    $row['fl'] += $sd['fl'] ?? 0;
+                    $row['gl'] += $sd['gl'] ?? 0;
+                }
+
+                $summaryData[] = $row;
+                foreach ($keys as $k) {
+                    $grandTotals[$k] += $row[$k];
+                }
+            }
+        }
+
+        // Each $summaryData row is already a pre-aggregated Department+Section bucket
+        // (spanning many employees), not a single employee — so only Department/Section
+        // are coherent rollup axes here; anything else falls back to Department.
+        $effectiveGroupBy = in_array($groupBy, ['section', 'none'], true) ? $groupBy : 'department';
+        $rollupKey = match ($effectiveGroupBy) {
+            'section' => 'sec_id',
+            'none' => null,
+            default => 'dept_id',
+        };
+
+        return [
+            'byDeptSummary' => $rollupKey ? collect($summaryData)->groupBy($rollupKey) : collect(['all' => collect($summaryData)]),
+            'grandTotals' => $grandTotals,
+            'groupBy' => $effectiveGroupBy,
+        ];
+    }
+
+    /**
+     * Per-employee bonus amounts (grouped by department) for the Bonus report.
+     */
+    public static function buildBonusReportData($employees, $request, string $to, string $groupBy = 'department'): array
+    {
+        $bonusPolicies = collect();
+        $bonusTitle = null;
+        $bonusByDept = [];
+        $bonusGrandTotal = 0;
+        $bonusGrandEmp = 0;
+        $hasPctPolicy = false;
+
+        $bonusTitleId = $request->input('bonus_title');
+        if (filled($bonusTitleId)) {
+            $bonusTitle = \ME\Hr\Models\HrBonusTitle::find($bonusTitleId);
+            $bonusPolicies = \ME\Hr\Models\HrBonusPolicy::query()->where('bonus_title_id', $bonusTitleId)->where('status', 'active')->get();
+            if ($bonusPolicies->isEmpty()) {
+                $bonusPolicies = \ME\Hr\Models\HrBonusPolicy::query()->where('bonus_title_id', $bonusTitleId)->get();
+            }
+        }
+
+        if ($bonusPolicies->isNotEmpty()) {
+            $bonusReferenceDate = \Carbon\Carbon::parse($request->input('up_to_date') ?: $to);
+
+            // Always hardcoded Department-grouped before — default 'department' preserves
+            // that; $bonusGrandTotal/$bonusGrandEmp accumulate across every employee
+            // regardless of bucket, so the grand total is identical no matter the axis.
+            $groupKeyFn = match ($groupBy) {
+                'none' => fn ($emp) => 'all',
+                'classification' => fn ($emp) => (string) $emp->classification_id,
+                'section' => fn ($emp) => (string) $emp->section_id,
+                'sub_section' => fn ($emp) => (string) $emp->sub_section_id,
+                'designation' => fn ($emp) => (string) $emp->designation_id,
+                'shift' => fn ($emp) => (string) $emp->shift_id,
+                'department_section' => fn ($emp) => $emp->department_id . '|' . $emp->section_id,
+                'department_designation' => fn ($emp) => $emp->department_id . '|' . $emp->designation_id,
+                default => fn ($emp) => (string) $emp->department_id, // department
+            };
+
+            foreach ($employees->groupBy($groupKeyFn) as $groupKey => $groupEmps) {
+                $rows = [];
+                foreach ($groupEmps as $emp) {
+                    $bd = self::computeEmployeeBonus($emp, $bonusPolicies, $bonusReferenceDate);
+                    if ($bd['policy'] === null) {
+                        continue;
+                    }
+                    $rows[] = ['emp' => $emp, 'bd' => $bd];
+                    $bonusGrandTotal += $bd['bonus'];
+                    $bonusGrandEmp++;
+                    if ($bd['percent'] !== null) {
+                        $hasPctPolicy = true;
+                    }
+                }
+                if (!empty($rows)) {
+                    $bonusByDept[(string) $groupKey] = $rows;
+                }
+            }
+        }
+
+        return compact('bonusPolicies', 'bonusTitle', 'bonusByDept', 'bonusGrandTotal', 'bonusGrandEmp', 'hasPctPolicy');
+    }
+
+    public static function computeEmployeeBonus($emp, $bonusPolicies, \Carbon\Carbon $bonusReferenceDate): array
+    {
+        $sal = hr_employee_salary($emp);
+        $gross = (float) ($sal['gross'] ?? $emp->gross_salary ?? 0);
+        $basic = (float) ($sal['basic'] ?? $emp->basic_salary ?? 0);
+        $productionBase = (float) ($sal['production_salary'] ?? $sal['production'] ?? $sal['total_production'] ?? 0);
+
+        $joiningDate = $emp->joining_date ? \Carbon\Carbon::parse($emp->joining_date) : null;
+        $serviceMonths = $joiningDate ? max(0, (int) $joiningDate->diffInMonths($bonusReferenceDate, false)) : null;
+
+        $matchedPolicy = $bonusPolicies->filter(function ($policy) use ($emp, $serviceMonths) {
+            $designationMatch = !$policy->designation_id || (int) $policy->designation_id === (int) $emp->designation_id;
+            $sectionMatch = !$policy->section_id || (int) $policy->section_id === (int) $emp->section_id;
+
+            $monthFrom = is_null($policy->month_from) ? null : (int) $policy->month_from;
+            $monthTo = is_null($policy->month_to) ? null : (int) $policy->month_to;
+
+            $monthMatch = true;
+            if (!is_null($serviceMonths)) {
+                if (!is_null($monthFrom)) {
+                    $monthMatch = $monthMatch && ($serviceMonths >= $monthFrom);
+                }
+                if (!is_null($monthTo)) {
+                    $monthMatch = $monthMatch && ($serviceMonths <= $monthTo);
+                }
+            } elseif (!is_null($monthFrom) || !is_null($monthTo)) {
+                $monthMatch = false;
+            }
+
+            return $designationMatch && $sectionMatch && $monthMatch;
+        })->sortByDesc(function ($policy) {
+            return (is_null($policy->designation_id) ? 0 : 4)
+                + (is_null($policy->section_id) ? 0 : 2)
+                + (is_null($policy->month_from) ? 0 : 1)
+                + (is_null($policy->month_to) ? 0 : 1);
+        })->first();
+
+        $bonus = 0.0;
+        $policyLabel = '—';
+        $percent = null;
+
+        if ($matchedPolicy) {
+            $amountType = strtolower($matchedPolicy->amount_type ?? 'percent');
+            $salaryBasis = strtolower($matchedPolicy->salary_basis ?? 'gross');
+            $base = match ($salaryBasis) {
+                'basic' => $basic,
+                'production' => $productionBase,
+                default => $gross,
+            };
+            if ($amountType === 'fixed') {
+                $bonus = (float) $matchedPolicy->amount;
+            } else {
+                $percent = (float) $matchedPolicy->amount;
+                $bonus = round($base * $percent / 100, 2);
+            }
+            $policyLabel = $matchedPolicy->name . ($percent !== null ? " ({$percent}%)" : '');
+        }
+
+        $jobAge = 'N/A';
+        if ($joiningDate) {
+            $diff = $joiningDate->diff($bonusReferenceDate);
+            $jobAge = sprintf('%dy %dm %dd', $diff->y, $diff->m, $diff->d);
+        }
+
+        return [
+            'bonus' => $bonus,
+            'basic' => $basic,
+            'gross' => $gross,
+            'policy' => $matchedPolicy,
+            'policy_label' => $policyLabel,
+            'job_age' => $jobAge,
+            'percent' => $percent,
+        ];
+    }
+
+    /**
+     * Detailed per-employee rows (grouped by department/section) for the Salary Sheet report.
+     * Shared by both 'fixed' and 'production' report types, and by both the SFL and non-SFL
+     * salary-sheet blade layouts — the row data is identical, only the column layout differs.
+     */
+    public static function buildSalarySheetData($employees, string $from, string $to, $request, $leaveInfos, string $groupBy = 'department_section'): array
+    {
+        $employeeDataFn = HrOptionsService::getOptionsForEmployee();
+
+        $periodStart = \Carbon\Carbon::parse($from);
+        $periodEnd = \Carbon\Carbon::parse($to);
+        $totalMonthDays = (int) $periodStart->daysInMonth;
+        $totalPeriodDays = (int) $periodStart->diffInDays($periodEnd) + 1;
+
+        // The report's own date range capped at today — a still-in-progress period
+        // (its end date hasn't happened yet) must not credit days that haven't
+        // occurred. A fully completed period is unaffected (today is already past
+        // periodEnd, so this equals $totalPeriodDays as normal).
+        $today = now()->startOfDay();
+        $effectiveEarnEnd = $periodEnd->copy()->startOfDay()->min($today);
+        $elapsedMonthDays = $effectiveEarnEnd->lt($periodStart->copy()->startOfDay())
+            ? 0
+            : (int) $periodStart->copy()->startOfDay()->diffInDays($effectiveEarnEnd) + 1;
+
+        $dayMap = ['sunday' => 0, 'monday' => 1, 'tuesday' => 2, 'wednesday' => 3, 'thursday' => 4, 'friday' => 5, 'saturday' => 6];
+        $weekendRaw = (string) (hr_factory('weekend') ?? 'Friday');
+        $weekendNames = collect(preg_split('/\s*,\s*/', $weekendRaw))
+            ->filter(fn ($v) => filled($v))
+            ->map(fn ($v) => strtolower(trim((string) $v)))
+            ->values();
+        if ($weekendNames->isEmpty()) {
+            $weekendNames = collect(['friday']);
+        }
+        $weekendDayNumbers = $weekendNames->map(fn ($name) => $dayMap[$name] ?? null)->filter(fn ($n) => !is_null($n))->unique()->values()->all();
+        if (empty($weekendDayNumbers)) {
+            $weekendDayNumbers = [\Carbon\Carbon::FRIDAY];
+        }
+
+        $datePeriod = collect(\Carbon\CarbonPeriod::create($periodStart->copy()->startOfDay(), '1 day', $periodEnd->copy()->startOfDay()));
+        $weekendDateMap = $datePeriod
+            ->filter(fn ($d) => in_array($d->dayOfWeek, $weekendDayNumbers, true))
+            ->mapWithKeys(fn ($d) => [$d->format('Y-m-d') => true])
+            ->all();
+
+        try {
+            $rtwRows = \ME\Hr\Models\HrRegularToWeekend::query()
+                ->whereDate('date', '>=', $periodStart->toDateString())
+                ->whereDate('date', '<=', $periodEnd->toDateString())
+                ->where('status', 1)
+                ->get(['date', 'type']);
+
+            foreach ($rtwRows as $rtw) {
+                $dateKey = \Carbon\Carbon::parse($rtw->date)->format('Y-m-d');
+                if (strtolower((string) $rtw->type) === 'weekend') {
+                    $weekendDateMap[$dateKey] = true;
+                } elseif (strtolower((string) $rtw->type) === 'regular') {
+                    unset($weekendDateMap[$dateKey]);
+                }
+            }
+        } catch (\Throwable $e) {
+            // Keep base weekend calculation when regular_to_weekends table/data is unavailable.
+        }
+
+        $holidayDateMap = [];
+        try {
+            $holidayRows = \ME\Hr\Models\HrHoliday::query()
+                ->where('status', 1)
+                ->where(fn ($q) => $q->whereNull('type')->orWhere('type', 'not like', '%Weekly%'))
+                ->where(function ($q) use ($periodStart, $periodEnd) {
+                    $q->whereBetween('from_date', [$periodStart->toDateString(), $periodEnd->toDateString()])
+                        ->orWhereBetween('to_date', [$periodStart->toDateString(), $periodEnd->toDateString()])
+                        ->orWhere(function ($q2) use ($periodStart, $periodEnd) {
+                            $q2->where('from_date', '<=', $periodStart->toDateString())
+                                ->where('to_date', '>=', $periodEnd->toDateString());
+                        });
+                })
+                ->get(['from_date', 'to_date']);
+
+            foreach ($holidayRows as $holiday) {
+                $hStart = \Carbon\Carbon::parse($holiday->from_date)->startOfDay();
+                $hEndRaw = filled($holiday->to_date) ? $holiday->to_date : $holiday->from_date;
+                $hEnd = \Carbon\Carbon::parse($hEndRaw)->startOfDay();
+
+                if ($hStart->lt($periodStart->copy()->startOfDay())) {
+                    $hStart = $periodStart->copy()->startOfDay();
+                }
+                if ($hEnd->gt($periodEnd->copy()->startOfDay())) {
+                    $hEnd = $periodEnd->copy()->startOfDay();
+                }
+
+                if ($hStart->lte($hEnd)) {
+                    foreach (\Carbon\CarbonPeriod::create($hStart, '1 day', $hEnd) as $hDate) {
+                        $holidayDateMap[$hDate->format('Y-m-d')] = true;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // Keep holiday count 0 when holidays table/data is unavailable.
+        }
+
+        $weekendCount = count($weekendDateMap);
+        $otherHolidayCount = count(array_diff_key($holidayDateMap, $weekendDateMap));
+        $totalWorkingDays = max(0, $totalPeriodDays - $weekendCount - $otherHolidayCount);
+        $deductionMonthDays = 30;
+        $factoryNo = (int) (hr_factory('factory_no') ?? 0);
+
+        $grandBase = [
+            'emp' => 0, 'basic' => 0, 'house' => 0, 'medical' => 0,
+            'transport' => 0, 'food' => 0, 'salary_total' => 0,
+            'pr' => 0, 'wh' => 0, 'fh' => 0, 'fl' => 0, 'gl' => 0, 'ab' => 0, 'earn_days' => 0,
+            'att_bonus' => 0, 'deduct_absent' => 0, 'loan' => 0, 'tax' => 0, 'stamp' => 0,
+            'deduct_other' => 0, 'wph_days' => 0, 'wph_amount' => 0,
+            'other_earn' => 0, 'gross' => 0, 'payable' => 0,
+            'ot_hours' => 0, 'ot_rate' => 0, 'ot_total' => 0,
+            'extra_facility' => 0, 'net' => 0, 'deduction_total' => 0,
+            'sfl_pay_day' => 0, 'sfl_ab' => 0, 'sfl_deduct_absent' => 0,
+            'sfl_total' => 0, 'sfl_net' => 0, 'sfl_payable' => 0,
+        ];
+        foreach ($leaveInfos as $li) {
+            $grandBase['leave_' . strtoupper($li->code)] = 0;
+        }
+        $grand = $grandBase;
+        $sheetRows = [];
+
+        // Bucketing axis for the sub-header rows/subtotals below — 'department_section'
+        // (Department + Section, one bucket per unique pair) is the original, always-on
+        // behavior this report had before Group By existed; other axes are additive.
+        // $grand accumulates across every employee regardless of bucket, so the grand
+        // total is identical no matter which axis is chosen here.
+        $groupKeyFn = match ($groupBy) {
+            'none' => fn ($emp) => 'all',
+            'classification' => fn ($emp) => (string) $emp->classification_id,
+            'department' => fn ($emp) => (string) $emp->department_id,
+            'section' => fn ($emp) => (string) $emp->section_id,
+            'sub_section' => fn ($emp) => (string) $emp->sub_section_id,
+            'designation' => fn ($emp) => (string) $emp->designation_id,
+            'shift' => fn ($emp) => (string) $emp->shift_id,
+            'department_designation' => fn ($emp) => $emp->department_id . '|' . $emp->designation_id,
+            default => fn ($emp) => $emp->department_id . '|' . $emp->section_id, // department_section
+        };
+
+        foreach ($employees->groupBy($groupKeyFn) as $groupKey => $groupEmps) {
+                $secEmps = self::sortEmployeesByNaturalId($groupEmps);
+                $rows = [];
+                $secTotals = $grandBase;
+
+                foreach ($secEmps as $emp) {
+                    $sd = self::getEmployeeSalaryData($emp, $from, $to, $request, $employeeDataFn);
+
+                    $otRate = (float) ($sd['ot_rate'] ?? 0);
+                    $presentDays = (int) ($sd['present'] ?? 0);
+                    $absentDays = (int) ($sd['absent'] ?? 0);
+                    $attBonus = (float) ($sd['att_bonus'] ?? 0);
+                    $loan = (float) ($sd['loan'] ?? 0);
+                    $tax = (float) ($sd['tax'] ?? 0);
+                    $stamp = (float) ($sd['stamp'] ?? 0);
+                    $deductOther = (float) ($sd['deduct_other'] ?? 0);
+                    $otherEarn = (float) ($sd['allow_other'] ?? 0) + (float) ($sd['arrear'] ?? 0);
+                    $wphAmount = (float) ($sd['wph_amount'] ?? 0);
+                    $otAmount = (float) ($sd['ot'] ?? 0);
+                    $extraFacility = (float) ($sd['extra_facility'] ?? 0);
+
+                    // $effectiveDays = days actually relevant to this employee within the
+                    // report's own date range: capped globally by $elapsedMonthDays (today,
+                    // for a still-in-progress period) and per-employee by
+                    // $sd['employed_days'] (their own join/exit dates, for anyone who
+                    // joined or resigned partway through it). This is the window Earn
+                    // Days, the salary proration, and the attendance-bonus eligibility
+                    // below are all measured against — never the full calendar month
+                    // unless the report period and the employee's own employment both
+                    // actually cover the whole thing.
+                    $unpaidDays = $absentDays;
+                    $employedDaysInPeriod = (int) ($sd['employed_days'] ?? $elapsedMonthDays);
+
+                    // Normalize real calendar employed-days onto the standard 30-day
+                    // payroll scale before capping — a 31-day month must not let "employed
+                    // all but 1 day" (e.g. joined the 2nd) silently round up to a full
+                    // 30/30 payable window just because 30 real days happens to already
+                    // hit $deductionMonthDays. Comparing raw day-counts against the fixed
+                    // 30-day cap can't catch that gap: 30 employed-days out of a 31-day
+                    // month and 30 employed-days out of a 30-day month are indistinguishable
+                    // as plain counts. Scaling first (30 * employedDays/totalMonthDays) is
+                    // what actually surfaces the missing day.
+                    $normalizedEmployedDays = $totalMonthDays > 0
+                        ? (int) round($employedDaysInPeriod * $deductionMonthDays / $totalMonthDays)
+                        : $employedDaysInPeriod;
+
+                    $effectiveDays = min($elapsedMonthDays, $normalizedEmployedDays, $deductionMonthDays);
+                    $earnDays = max(0, $effectiveDays - $unpaidDays);
+
+                    // Attendance Bonus requires a genuinely full, completed month for this
+                    // employee — a partial view (still-in-progress period, or a mid-period
+                    // join/exit) never qualifies, regardless of how few/no absences there
+                    // were within whatever partial window was actually covered. The "full
+                    // month" threshold is capped at $deductionMonthDays too, since
+                    // $effectiveDays itself never exceeds it (a 31-day calendar month must
+                    // not be treated as a partial month just because payroll uses 30 days).
+                    if ($effectiveDays < min($totalMonthDays, $deductionMonthDays)) {
+                        $attBonus = 0.0;
+                    }
+
+                    // Absent Amt: real absence only, at the compliance-mode day-rate — the
+                    // literal deduction for days actually marked Absent within the window
+                    // above (never for days outside it, e.g. after a resignation or before
+                    // today in an in-progress month — those simply aren't part of the paid
+                    // window at all, see $proratedSalaryTotal below, rather than being
+                    // deducted as if they were absences).
+                    $absentBase   = self::complianceBase($factoryNo, (float) $sd['basic'], (float) $sd['gross']);
+                    $absentPerDay = $deductionMonthDays > 0 ? ($absentBase / $deductionMonthDays) : 0;
+                    $deductAbsent = $unpaidDays > 0 ? round($absentPerDay * $unpaidDays, 2) : 0;
+
+                    $salaryTotal = $sd['basic'] + $sd['house_rent'] + $sd['medical'] + $sd['transport'] + $sd['food_allow'];
+
+                    // Prorate the salary components themselves to $effectiveDays (out of
+                    // the standard 30-day payroll month) — this is what makes a 10-day
+                    // report correctly show ~10/30 of a full month's pay instead of the
+                    // full month minus a deduction for the other ~20 days. Present days
+                    // within that window are paid at the same day-rate; Absent Amt above
+                    // is subtracted on top for the days marked Absent within it.
+                    $salaryPerDay        = $deductionMonthDays > 0 ? ($salaryTotal / $deductionMonthDays) : 0;
+                    $proratedSalaryTotal = round($salaryPerDay * $effectiveDays, 2);
+
+                    $payableSalary  = max(0, ($proratedSalaryTotal + $attBonus + $wphAmount + $otherEarn) - $deductAbsent);
+                    $deductionTotal = (float) ($sd['total_deduct'] ?? 0) + $deductAbsent;
+                    $netSalary      = max(0, $payableSalary + $otAmount + $extraFacility - ($loan + $tax + $stamp + $deductOther));
+
+                    // SFL-layout-only figures (Salary Sheet print): Total Salary = Gross -
+                    // Absent Amt TK + Att Bonus + Other Allowance; Net Salary = Total Salary
+                    // + OT-Amount; Payable = Net Salary - Advance Paid - Revenue (stamp).
+                    // These are separate from $salaryTotal/$payableSalary/$netSalary above,
+                    // which the non-SFL detailed salary sheet layout depends on — and from
+                    // $earnDays/$unpaidDays above, which are also shared with it.
+                    //
+                    // Two different things, two different treatments — a mid-period
+                    // join/resignation gap is NOT an absence (the employee wasn't marked
+                    // absent, they simply weren't employed yet/anymore), so it must not show
+                    // up as Absent Day or go through the Absent Amt deduction. Instead the
+                    // gap is captured by prorating Gross itself against the actual calendar
+                    // month length ($totalMonthDays) — a fully-employed, zero-absence
+                    // employee is paid full Gross regardless of a 28/30/31-day month, while a
+                    // partial-month joiner/leaver gets exactly their employed fraction. A real
+                    // marked absence (while actually employed) is deducted separately, at the
+                    // standard $deductionMonthDays(30) day-rate, same as elsewhere.
+                    // WOP (Without Pay leave) is the one leave type that isn't paid — it's
+                    // deducted exactly like a real absence, at the same day-rate. Every
+                    // other leave type (CL/SL/EL/FL/ML/GL/...) is paid and never reduces
+                    // Pay Day or Total Salary.
+                    $wopDays          = (int) ($sd['leaves_by_code']['WOP'] ?? 0);
+                    $sflUnpaidDays    = $absentDays + $wopDays;
+                    $sflProratedGross = $totalMonthDays > 0
+                        ? round($sd['gross'] * $employedDaysInPeriod / $totalMonthDays, 2)
+                        : $sd['gross'];
+                    $sflPayDay        = max(0, $employedDaysInPeriod - $sflUnpaidDays);
+                    $sflDeductAbsent  = $sflUnpaidDays > 0 ? round($absentPerDay * $sflUnpaidDays, 2) : 0;
+                    $sflTotalSalary   = max(0, $sflProratedGross - $sflDeductAbsent + $attBonus + $extraFacility);
+                    $sflNetSalary     = $sflTotalSalary + $otAmount;
+                    $sflPayable     = max(0, $sflNetSalary - $loan - $stamp);
+
+                    $row = [
+                        'emp' => $emp,
+                        'basic' => $sd['basic'],
+                        'house' => $sd['house_rent'],
+                        'medical' => $sd['medical'],
+                        'transport' => $sd['transport'],
+                        'food' => $sd['food_allow'],
+                        'salary_total' => $salaryTotal,
+                        'pr' => $presentDays,
+                        'wh' => $sd['wh'] ?? 0,
+                        'fh' => $sd['fh'] ?? 0,
+                        'fl' => $sd['fl'] ?? 0,
+                        'gl' => $sd['gl'] ?? 0,
+                        // Same raw attendance-status "Absent" count used for Earn Days above
+                        // and for the deduction below — kept as one variable ($unpaidDays) so
+                        // this column, Earn Days, and the deduction can never drift apart.
+                        'ab' => $unpaidDays,
+                        'earn_days' => $earnDays,
+                        'att_bonus' => $attBonus,
+                        'deduct_absent' => $deductAbsent,
+                        'loan' => $loan,
+                        'tax' => $tax,
+                        'stamp' => $stamp,
+                        'deduct_other' => $deductOther,
+                        'wph_days' => $sd['wph_days'],
+                        'wph_amount' => $wphAmount,
+                        'other_earn' => $otherEarn,
+                        'gross' => $sd['gross'],
+                        'payable' => $payableSalary,
+                        'ot_hours' => $sd['ot_hours'],
+                        'ot_rate' => $otRate,
+                        'ot_total' => $otAmount,
+                        'extra_facility' => $extraFacility,
+                        'net' => $netSalary,
+                        'deduction_total' => $deductionTotal,
+                        'sfl_pay_day' => $sflPayDay,
+                        'sfl_ab' => $absentDays,
+                        'sfl_deduct_absent' => $sflDeductAbsent,
+                        'sfl_total' => $sflTotalSalary,
+                        'sfl_net' => $sflNetSalary,
+                        'sfl_payable' => $sflPayable,
+                    ];
+                    foreach ($leaveInfos as $li) {
+                        $code = strtoupper($li->code);
+                        $row['leave_' . $code] = (int) ($sd['leaves_by_code'][$code] ?? 0);
+                    }
+                    $rows[] = $row;
+
+                    $secTotals['emp']++;
+                    $grand['emp']++;
+                    foreach (array_keys($grandBase) as $k) {
+                        if ($k === 'emp') {
+                            continue;
+                        }
+                        $secTotals[$k] = ($secTotals[$k] ?? 0) + ($row[$k] ?? 0);
+                        $grand[$k] = ($grand[$k] ?? 0) + ($row[$k] ?? 0);
+                    }
+                }
+
+                if (!empty($rows)) {
+                    $sheetRows[] = ['group_key' => (string) $groupKey, 'rows' => $rows, 'totals' => $secTotals];
+                }
+        }
+
+        return [
+            'sheetRows' => $sheetRows,
+            'grand' => $grand,
+            'totalMonthDays' => $totalMonthDays,
+            'totalWorkingDays' => $totalWorkingDays,
+            'weekendCount' => $weekendCount,
+            'otherHolidayCount' => $otherHolidayCount,
+            'inWords' => self::numberToWords((int) round($grand['net'])),
+            'sflInWords' => self::numberToWords((int) round($grand['sfl_payable'])),
+            'groupBy' => $groupBy,
+        ];
+    }
+
+    /**
+     * Per-employee, date-wise OT sheet (like the Salary Sheet, but each day of the
+     * period is its own column of OT hours) for the OT Sheet report.
+     */
+    public static function buildOtSheetData($employees, string $from, string $to, $request, string $groupBy = 'department_section'): array
+    {
+        $employeeDataFn = HrOptionsService::getOptionsForEmployee();
+        $factoryNo = (int) (hr_factory('factory_no') ?? 0);
+
+        $periodStart = \Carbon\Carbon::parse($from)->startOfDay();
+        $periodEnd = \Carbon\Carbon::parse($to)->startOfDay();
+        $dates = collect(\Carbon\CarbonPeriod::create($periodStart, '1 day', $periodEnd));
+
+        $grandBase = [
+            'emp' => 0, 'basic' => 0, 'house' => 0, 'medical' => 0, 'food' => 0,
+            'transport' => 0, 'gross' => 0, 'ot_hours' => 0, 'ot_rate' => 0, 'ot_amount' => 0,
+        ];
+        foreach ($dates as $d) {
+            $grandBase['day_' . $d->format('Y-m-d')] = 0;
+        }
+        $grand = $grandBase;
+        $sheetRows = [];
+
+        $groupKeyFn = match ($groupBy) {
+            'none' => fn ($emp) => 'all',
+            'classification' => fn ($emp) => (string) $emp->classification_id,
+            'department' => fn ($emp) => (string) $emp->department_id,
+            'section' => fn ($emp) => (string) $emp->section_id,
+            'sub_section' => fn ($emp) => (string) $emp->sub_section_id,
+            'designation' => fn ($emp) => (string) $emp->designation_id,
+            'shift' => fn ($emp) => (string) $emp->shift_id,
+            'department_designation' => fn ($emp) => $emp->department_id . '|' . $emp->designation_id,
+            default => fn ($emp) => $emp->department_id . '|' . $emp->section_id, // department_section
+        };
+
+        foreach ($employees->groupBy($groupKeyFn) as $groupKey => $groupEmps) {
+            $groupEmps = self::sortEmployeesByNaturalId($groupEmps);
+            $rows = [];
+            $groupTotals = $grandBase;
+
+            foreach ($groupEmps as $emp) {
+                $sd = self::getEmployeeSalaryData($emp, $from, $to, $request, $employeeDataFn);
+                $attendancePack = EmployeeAttendanceService::getEmployeeAttendanceByDate($emp->id, $from, $to);
+                $dayRows = collect($attendancePack['attendance'] ?? []);
+
+                $days = [];
+                foreach ($dates as $d) {
+                    $dateKey = $d->format('Y-m-d');
+                    $dayRow = $dayRows->first(fn ($r) => \Carbon\Carbon::parse($r['date'])->format('Y-m-d') === $dateKey);
+                    $otVal = ($factoryNo === 1 || $factoryNo === 2)
+                        ? (float) ($dayRow['compliance_ot'] ?? 0)
+                        : (float) ($dayRow['actual_ot'] ?? 0);
+                    $days[$dateKey] = $otVal;
+                }
+
+                $row = [
+                    'emp' => $emp,
+                    'basic' => $sd['basic'],
+                    'house' => $sd['house_rent'],
+                    'medical' => $sd['medical'],
+                    'food' => $sd['food_allow'],
+                    'transport' => $sd['transport'],
+                    'gross' => $sd['gross'],
+                    'days' => $days,
+                    'ot_hours' => $sd['ot_hours'],
+                    'ot_rate' => $sd['ot_rate'],
+                    'ot_amount' => $sd['ot'],
+                ];
+                $rows[] = $row;
+
+                $groupTotals['emp']++;
+                $grand['emp']++;
+                foreach (['basic', 'house', 'medical', 'food', 'transport', 'gross', 'ot_hours', 'ot_amount'] as $k) {
+                    $groupTotals[$k] += $row[$k];
+                    $grand[$k] += $row[$k];
+                }
+                foreach ($days as $dateKey => $val) {
+                    $groupTotals['day_' . $dateKey] += $val;
+                    $grand['day_' . $dateKey] += $val;
+                }
+            }
+
+            if (!empty($rows)) {
+                $sheetRows[] = ['group_key' => (string) $groupKey, 'rows' => $rows, 'totals' => $groupTotals];
+            }
+        }
+
+        return [
+            'sheetRows' => $sheetRows,
+            'grand' => $grand,
+            'dates' => $dates,
+            'groupBy' => $groupBy,
+        ];
+    }
+
+    public static function sortEmployeesByNaturalId($employees)
+    {
+        return $employees->sort(function ($a, $b) {
+            preg_match('/^([A-Za-z]*)(\d+)$/', $a->employee_id, $ma);
+            preg_match('/^([A-Za-z]*)(\d+)$/', $b->employee_id, $mb);
+            $prefixA = strtoupper($ma[1] ?? '');
+            $prefixB = strtoupper($mb[1] ?? '');
+            if ($prefixA !== $prefixB) {
+                return strcmp($prefixA, $prefixB);
+            }
+            return (int) ($ma[2] ?? 0) <=> (int) ($mb[2] ?? 0);
+        })->values();
+    }
+
+    public static function numberToWords(int $number): string
+    {
+        if ($number === 0) {
+            return 'zero';
+        }
+
+        $ones = [
+            '', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+            'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen',
+            'seventeen', 'eighteen', 'nineteen',
+        ];
+        $tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+
+        $convertBelowThousand = function ($n) use ($ones, $tens) {
+            $text = '';
+            $hundreds = intdiv($n, 100);
+            $rest = $n % 100;
+            if ($hundreds > 0) {
+                $text .= $ones[$hundreds] . ' hundred';
+                if ($rest > 0) {
+                    $text .= ' ';
+                }
+            }
+            if ($rest > 0) {
+                if ($rest < 20) {
+                    $text .= $ones[$rest];
+                } else {
+                    $text .= $tens[intdiv($rest, 10)];
+                    $u = $rest % 10;
+                    if ($u > 0) {
+                        $text .= '-' . $ones[$u];
+                    }
+                }
+            }
+            return trim($text);
+        };
+
+        $scales = [1000000000 => 'billion', 1000000 => 'million', 1000 => 'thousand', 1 => ''];
+        $parts = [];
+        foreach ($scales as $base => $label) {
+            if ($number >= $base) {
+                $chunk = intdiv($number, $base);
+                $number %= $base;
+                if ($chunk > 0) {
+                    $piece = $convertBelowThousand($chunk);
+                    if ($label !== '') {
+                        $piece .= ' ' . $label;
+                    }
+                    $parts[] = trim($piece);
+                }
+            }
+        }
+
+        return trim(implode(' ', $parts));
+    }
+
+    /**
+     * Bangla word-spelling of an integer, using the South Asian lakh/crore grouping
+     * (হাজার/লক্ষ/কোটি) rather than English's thousand/million/billion — this is the
+     * grouping Bangladeshi financial documents (cheques, settlement statements, etc.)
+     * are conventionally written in, not a direct translation of numberToWords().
+     */
+    public static function numberToWordsBn(int $number): string
+    {
+        if ($number === 0) {
+            return 'শূন্য';
+        }
+
+        $words = [
+            '', 'এক', 'দুই', 'তিন', 'চার', 'পাঁচ', 'ছয়', 'সাত', 'আট', 'নয়', 'দশ',
+            'এগারো', 'বারো', 'তেরো', 'চৌদ্দ', 'পনেরো', 'ষোলো', 'সতেরো', 'আঠারো', 'উনিশ', 'বিশ',
+            'একুশ', 'বাইশ', 'তেইশ', 'চব্বিশ', 'পঁচিশ', 'ছাব্বিশ', 'সাতাশ', 'আটাশ', 'ঊনত্রিশ', 'ত্রিশ',
+            'একত্রিশ', 'বত্রিশ', 'তেত্রিশ', 'চৌত্রিশ', 'পঁয়ত্রিশ', 'ছত্রিশ', 'সাঁইত্রিশ', 'আটত্রিশ', 'ঊনচল্লিশ', 'চল্লিশ',
+            'একচল্লিশ', 'বিয়াল্লিশ', 'তেতাল্লিশ', 'চুয়াল্লিশ', 'পঁয়তাল্লিশ', 'ছেচল্লিশ', 'সাতচল্লিশ', 'আটচল্লিশ', 'ঊনপঞ্চাশ', 'পঞ্চাশ',
+            'একান্ন', 'বাহান্ন', 'তিপ্পান্ন', 'চুয়ান্ন', 'পঞ্চান্ন', 'ছাপ্পান্ন', 'সাতান্ন', 'আটান্ন', 'ঊনষাট', 'ষাট',
+            'একষট্টি', 'বাষট্টি', 'তেষট্টি', 'চৌষট্টি', 'পঁয়ষট্টি', 'ছেষট্টি', 'সাতষট্টি', 'আটষট্টি', 'ঊনসত্তর', 'সত্তর',
+            'একাত্তর', 'বাহাত্তর', 'তিয়াত্তর', 'চুয়াত্তর', 'পঁচাত্তর', 'ছিয়াত্তর', 'সাতাত্তর', 'আটাত্তর', 'ঊনআশি', 'আশি',
+            'একাশি', 'বিরাশি', 'তিরাশি', 'চুরাশি', 'পঁচাশি', 'ছিয়াশি', 'সাতাশি', 'আটাশি', 'ঊননব্বই', 'নব্বই',
+            'একানব্বই', 'বিরানব্বই', 'তিরানব্বই', 'চুরানব্বই', 'পঁচানব্বই', 'ছিয়ানব্বই', 'সাতানব্বই', 'আটানব্বই', 'নিরানব্বই',
+        ];
+
+        $convertBelowHundred = fn ($n) => $words[$n] ?? '';
+
+        $convertBelowThousand = function ($n) use ($words, $convertBelowHundred) {
+            $hundreds = intdiv($n, 100);
+            $rest = $n % 100;
+            $text = $hundreds > 0 ? $words[$hundreds] . ' শত' : '';
+            if ($rest > 0) {
+                $text .= ($text !== '' ? ' ' : '') . $convertBelowHundred($rest);
+            }
+            return trim($text);
+        };
+
+        $scales = [10000000 => 'কোটি', 100000 => 'লক্ষ', 1000 => 'হাজার', 1 => ''];
+        $parts = [];
+        foreach ($scales as $base => $label) {
+            if ($number >= $base) {
+                $chunk = intdiv($number, $base);
+                $number %= $base;
+                if ($chunk > 0) {
+                    $piece = $convertBelowThousand($chunk);
+                    if ($label !== '') {
+                        $piece .= ' ' . $label;
+                    }
+                    $parts[] = trim($piece);
+                }
+            }
+        }
+
+        return trim(implode(' ', $parts));
+    }
+}

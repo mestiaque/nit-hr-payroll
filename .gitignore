@@ -1,0 +1,5 @@
+/vendor
+/.claude
+/.codex
+.DS_Store
+src/Config/sidebar copy.php
