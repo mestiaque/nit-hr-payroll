@@ -2,6 +2,7 @@
 
 namespace ME\Hr\Http\Controllers\Portal;
 
+use Illuminate\Auth\Events\Failed;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
@@ -31,14 +32,14 @@ class PortalAuthController extends Controller
         $login = $employee?->portalLogin;
 
         if (!$employee || !$login || !$login->is_active || !Hash::check($credentials['password'], $login->password)) {
+            event(new Failed('employee', $login, $credentials));
+
             return back()->withInput(['employee_id' => $credentials['employee_id']])
                 ->with('error', 'Invalid Employee ID or password.');
         }
 
         Auth::guard('employee')->login($login, $request->boolean('remember'));
         $login->forceFill(['last_login_at' => now()])->save();
-
-        $request->session()->regenerate();
 
         return redirect()->route('employee-portal.dashboard');
     }
@@ -47,6 +48,6 @@ class PortalAuthController extends Controller
     {
         Auth::guard('employee')->logout();
 
-        return redirect()->route('employee-portal.login');
+        return redirect()->route('login');
     }
 }

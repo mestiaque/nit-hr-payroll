@@ -6,10 +6,24 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use ME\Audit\Traits\HasAudit;
 
 class HrEmployee extends BaseHrModel
 {
+    use HasAudit;
+
     protected $table = 'hr_employees';
+
+    protected $auditRelations = [
+        'classification_id' => ['relation' => 'classification', 'display' => 'name'],
+        'department_id' => ['relation' => 'department', 'display' => 'name'],
+        'section_id' => ['relation' => 'section', 'display' => 'name'],
+        'sub_section_id' => ['relation' => 'subSection', 'display' => 'name'],
+        'floor_line_id' => ['relation' => 'floorLine', 'display' => 'floor_name'],
+        'designation_id' => ['relation' => 'designation', 'display' => 'name'],
+        'working_place_id' => ['relation' => 'workingPlace', 'display' => 'name'],
+        'shift_id' => ['relation' => 'shift', 'display' => 'name'],
+    ];
 
     public function imageFile(): HasOne
     {

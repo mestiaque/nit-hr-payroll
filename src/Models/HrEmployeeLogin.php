@@ -4,8 +4,9 @@ namespace ME\Hr\Models;
 
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
+use ME\Audit\Contracts\AuditableDisplay;
 
-class HrEmployeeLogin extends Authenticatable
+class HrEmployeeLogin extends Authenticatable implements AuditableDisplay
 {
     protected $table = 'hr_employee_logins';
 
@@ -37,5 +38,12 @@ class HrEmployeeLogin extends Authenticatable
     public function employee(): BelongsTo
     {
         return $this->belongsTo(HrEmployee::class, 'employee_id');
+    }
+
+    public function getAuditDisplayName(): string
+    {
+        $employee = $this->employee;
+
+        return $employee ? $employee->name.' ('.$employee->employee_id.')' : '#'.$this->getKey();
     }
 }
