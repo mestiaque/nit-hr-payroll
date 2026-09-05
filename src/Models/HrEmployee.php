@@ -2,6 +2,8 @@
 
 namespace ME\Hr\Models;
 
+require_once __DIR__.'/../Support/optional_audit_package.php';
+
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;

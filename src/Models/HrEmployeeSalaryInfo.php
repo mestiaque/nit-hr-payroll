@@ -2,6 +2,8 @@
 
 namespace ME\Hr\Models;
 
+require_once __DIR__.'/../Support/optional_audit_package.php';
+
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use ME\Audit\Contracts\HasAuditParent;
