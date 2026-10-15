@@ -25,12 +25,14 @@
         'production' => route('hr-center.reports.production-salary-print'),
         'bonus' => route('hr-center.reports.bonus-salary-print'),
         'wages-salary-summary' => route('hr-center.reports.wages-salary-summary-print'),
+        'salary-summary-sfl' => route('hr-center.reports.salary-summary-sfl-print'),
     ];
     $salaryScreenRoutes = [
         'fixed' => route('hr-center.reports.fixed-salary'),
         'production' => route('hr-center.reports.production-salary'),
         'bonus' => route('hr-center.reports.bonus-salary'),
         'wages-salary-summary' => route('hr-center.reports.wages-salary-summary'),
+        'salary-summary-sfl' => route('hr-center.reports.salary-summary-sfl'),
     ];
 
     // Use central HR options service for all lookups
@@ -200,6 +202,20 @@
                             <input class="form-check-input" type="checkbox" name="with_picture" value="1"
                                    id="withPicture" @checked($request->boolean('with_picture'))>
                             <label class="form-check-label" for="withPicture">Show Photo</label>
+                        </div>
+                    </div>
+
+                    <div class="col-md-3 mb-3">
+                        <label class="mb-1">Salary Date <small class="text-muted">(leave blank for the active Salary Key's date)</small></label>
+                        <input type="date" name="salary_date" class="form-control form-control-sm" value="{{ $request->salary_date }}">
+                    </div>
+
+                    <div class="col-md-3 mb-3">
+                        <label class="mb-1 d-block">Signature</label>
+                        <div class="form-check form-switch mt-1">
+                            <input class="form-check-input" type="checkbox" name="with_signature" value="1"
+                                   id="withSignature" @checked($request->boolean('with_signature'))>
+                            <label class="form-check-label" for="withSignature">Show Signature Box</label>
                         </div>
                     </div>
 

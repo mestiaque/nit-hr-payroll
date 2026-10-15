@@ -28,6 +28,13 @@ return [
                         'permission' => 'hr_asset_category',
                     ],
                     [
+                        'title'      => 'Asset Location',
+                        'icon'       => 'fa-solid fa-arrow-right',
+                        'route'      => '/admin/hr-center/masters/asset-locations',
+                        'icon_color' => 'text-warning',
+                        'permission' => 'hr_asset_location',
+                    ],
+                    [
                         'title'      => 'Block/Line',
                         'icon'       => 'fa-solid fa-arrow-right',
                         'route'      => '/admin/hr-center/masters/floor-lines',
@@ -216,11 +223,25 @@ return [
                 'permission' => 'hr_employee_gate_pass',
             ],
             [
-                'title'      => 'Asset Management',
+                'title'      => 'Asset Handover',
                 'icon'       => 'fa-solid fa-laptop',
                 'route'      => '/admin/hr-center/employee-assets',
                 'icon_color' => 'text-warning',
                 'permission' => 'hr_employee_asset',
+            ],
+            [
+                'title'      => 'Asset Management',
+                'icon'       => 'fa-solid fa-boxes-stacked',
+                'route'      => '/admin/hr-center/company-assets',
+                'icon_color' => 'text-warning',
+                'permission' => 'hr_company_asset',
+            ],
+            [
+                'title'      => 'Disciplinary Notice',
+                'icon'       => 'fa-solid fa-triangle-exclamation',
+                'route'      => '/admin/hr-center/disciplinary-notices',
+                'icon_color' => 'text-warning',
+                'permission' => 'hr_disciplinary_notice',
             ],
             [
                 'title'      => 'Conveyance Requests',
@@ -376,6 +397,13 @@ return [
                                 'permission' => 'hr_salary_report_wage',
                             ],
                             [
+                                'title'      => 'Salary Summary SFL',
+                                'icon'       => 'fa-solid fa-arrow-right',
+                                'route'      => '/admin/hr-center/reports/salary-summary-sfl',
+                                'icon_color' => 'text-warning',
+                                'permission' => 'hr_salary_summary_sfl_report',
+                            ],
+                            [
                                 'title'      => 'OT Summary',
                                 'icon'       => 'fa-solid fa-arrow-right',
                                 'route'      => '/admin/hr-center/reports/ot-summary',
@@ -454,6 +482,13 @@ return [
                         'icon_color' => 'text-secondary',
                         'permission' => '',
                         'children'   => [
+                            [
+                                'title'      => 'Current Asset Report',
+                                'icon'       => 'fa-solid fa-arrow-right',
+                                'route'      => '/admin/hr-center/reports/company-asset-report',
+                                'icon_color' => 'text-warning',
+                                'permission' => 'hr_company_asset_report',
+                            ],
                             [
                                 'title'      => 'Asset Report',
                                 'icon'       => 'fa-solid fa-arrow-right',

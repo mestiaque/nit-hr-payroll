@@ -8,6 +8,10 @@ use ME\Hr\Http\Controllers\HrHolidayController;
 use ME\Hr\Http\Controllers\HrFloorLineController;
 use ME\Hr\Http\Controllers\HrEmployeeGatePassController;
 use ME\Hr\Http\Controllers\HrEmployeeAssetController;
+use ME\Hr\Http\Controllers\HrCompanyAssetController;
+use ME\Hr\Http\Controllers\CompanyAssetImportController;
+use ME\Hr\Http\Controllers\EmployeeImportController;
+use ME\Hr\Http\Controllers\HrDisciplinaryNoticeController;
 use ME\Hr\Http\Controllers\HrMasterController;
 use ME\Hr\Http\Controllers\HrReportController;
 use ME\Hr\Http\Controllers\ProductionRateController;
@@ -35,6 +39,12 @@ Route::middleware($route['middleware'] ?? ['web'])
 		Route::match(['get', 'post'], '/attendances/sync-status', [\ME\Hr\Http\Controllers\AttendanceController::class, 'syncStatus'])->name('attendances.sync-status');
 		Route::get('/', [HrDashboardController::class, 'index'])->name('dashboard');
 		Route::get('/employees', [HrEmployeeController::class, 'index'])->name('employees.index');
+		Route::get('/employees/export', [HrEmployeeController::class, 'export'])->name('employees.export');
+		Route::get('/employees/import', [EmployeeImportController::class, 'create'])->name('employees.import');
+		Route::get('/employees/import/template', [EmployeeImportController::class, 'template'])->name('employees.import.template');
+		Route::post('/employees/import/preview', [EmployeeImportController::class, 'preview'])->name('employees.import.preview');
+		Route::post('/employees/import/save', [EmployeeImportController::class, 'save'])->name('employees.import.save');
+		Route::post('/employees/import/recheck', [EmployeeImportController::class, 'recheck'])->name('employees.import.recheck');
 		Route::get('/employees/{employee}/view', [HrEmployeeController::class, 'show'])->name('employees.show');
 		Route::post('/employees', [HrEmployeeController::class, 'store'])->name('employees.store');
 		Route::put('/employees/{employee}/profile', [HrEmployeeController::class, 'updateProfile'])->name('employees.profile.update');
@@ -88,6 +98,8 @@ Route::middleware($route['middleware'] ?? ['web'])
 		Route::get('/reports/bonus-salary-print', [HrReportController::class, 'bonusSalaryReportPrint'])->name('reports.bonus-salary-print');
 		Route::get('/reports/wages-salary-summary', [HrReportController::class, 'wagesSalarySummaryReportScreen'])->name('reports.wages-salary-summary');
 		Route::get('/reports/wages-salary-summary-print', [HrReportController::class, 'wagesSalarySummaryReportPrint'])->name('reports.wages-salary-summary-print');
+		Route::get('/reports/salary-summary-sfl', [HrReportController::class, 'salarySummarySflReportScreen'])->name('reports.salary-summary-sfl');
+		Route::get('/reports/salary-summary-sfl-print', [HrReportController::class, 'salarySummarySflReportPrint'])->name('reports.salary-summary-sfl-print');
 		Route::get('/reports/daily-attendance-report', [HrReportController::class, 'dailyAttendanceReportScreen'])->name('reports.daily-attendance-report');
 		Route::get('/reports/daily-attendance-report-print', [HrReportController::class, 'dailyAttendanceReportPrint'])->name('reports.daily-attendance-report-print');
 		Route::get('/reports/ot-summary', [HrReportController::class, 'otSummaryReportScreen'])->name('reports.ot-summary');
@@ -98,6 +110,8 @@ Route::middleware($route['middleware'] ?? ['web'])
 		Route::get('/reports/gate-pass-report-print', [HrReportController::class, 'gatePassReportPrint'])->name('reports.gate-pass-report-print');
 		Route::get('/reports/asset-report', [HrReportController::class, 'assetReportScreen'])->name('reports.asset-report');
 		Route::get('/reports/asset-report-print', [HrReportController::class, 'assetReportPrint'])->name('reports.asset-report-print');
+		Route::get('/reports/company-asset-report', [HrCompanyAssetController::class, 'reportScreen'])->name('reports.company-asset-report');
+		Route::get('/reports/company-asset-report-print', [HrCompanyAssetController::class, 'reportPrint'])->name('reports.company-asset-report-print');
 		Route::get('/reports/bonus-sheet/{category}', [HrReportController::class, 'bonusSheetByCategory'])->name('reports.bonus-sheet.category');
 		Route::get('/reports/{report}', [HrReportController::class, 'show'])->name('reports.show');
 		Route::post('/reports/monthly/lock-increment', [HrReportController::class, 'lockMonthlyIncrement'])->name('reports.monthly.lock-increment');
@@ -137,6 +151,29 @@ Route::middleware($route['middleware'] ?? ['web'])
 		Route::put('/employee-assets/{id}', [HrEmployeeAssetController::class, 'update'])->name('employee-assets.update');
 		Route::put('/employee-assets/{id}/return', [HrEmployeeAssetController::class, 'returnAsset'])->name('employee-assets.return');
 		Route::get('/employee-assets/{id}/print', [HrEmployeeAssetController::class, 'print'])->name('employee-assets.print');
+
+		// Company Asset (location/department fixed-asset register)
+		Route::get('/company-assets', [HrCompanyAssetController::class, 'index'])->name('company-assets.index');
+		Route::get('/company-assets/create', [HrCompanyAssetController::class, 'create'])->name('company-assets.create');
+		Route::post('/company-assets', [HrCompanyAssetController::class, 'store'])->name('company-assets.store');
+		// "import" segment isn't swallowed as an asset id — these must stay above the {id} routes below.
+		Route::get('/company-assets/import', [CompanyAssetImportController::class, 'create'])->name('company-assets.import');
+		Route::get('/company-assets/import/template', [CompanyAssetImportController::class, 'template'])->name('company-assets.import.template');
+		Route::post('/company-assets/import/preview', [CompanyAssetImportController::class, 'preview'])->name('company-assets.import.preview');
+		Route::post('/company-assets/import/save', [CompanyAssetImportController::class, 'save'])->name('company-assets.import.save');
+		Route::post('/company-assets/import/recheck', [CompanyAssetImportController::class, 'recheck'])->name('company-assets.import.recheck');
+		Route::get('/company-assets/{id}/edit', [HrCompanyAssetController::class, 'edit'])->name('company-assets.edit');
+		Route::put('/company-assets/{id}', [HrCompanyAssetController::class, 'update'])->name('company-assets.update');
+		Route::delete('/company-assets/{id}', [HrCompanyAssetController::class, 'destroy'])->name('company-assets.destroy');
+
+		// Disciplinary Notice (Show Cause Notice for salary deduction, with saved history)
+		Route::get('/disciplinary-notices', [HrDisciplinaryNoticeController::class, 'index'])->name('disciplinary-notices.index');
+		Route::get('/disciplinary-notices/create', [HrDisciplinaryNoticeController::class, 'create'])->name('disciplinary-notices.create');
+		Route::post('/disciplinary-notices', [HrDisciplinaryNoticeController::class, 'store'])->name('disciplinary-notices.store');
+		Route::get('/disciplinary-notices/{id}/edit', [HrDisciplinaryNoticeController::class, 'edit'])->name('disciplinary-notices.edit');
+		Route::put('/disciplinary-notices/{id}', [HrDisciplinaryNoticeController::class, 'update'])->name('disciplinary-notices.update');
+		Route::delete('/disciplinary-notices/{id}', [HrDisciplinaryNoticeController::class, 'destroy'])->name('disciplinary-notices.destroy');
+		Route::get('/disciplinary-notices/{id}/print', [HrDisciplinaryNoticeController::class, 'print'])->name('disciplinary-notices.print');
 
 		// Floor Lines (Block / Line)
 		Route::get('/masters/floor-lines', [HrFloorLineController::class, 'index'])->name('floor-lines.index');

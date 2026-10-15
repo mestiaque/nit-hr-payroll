@@ -67,6 +67,9 @@
 .tc { text-align: center; }
 .card-col { width: 70px; }
 .name-col { width: 135px; }
+.dept-col { width: 95px; }
+.desig-col { width: 95px; }
+.join-col { width: 55px; }
 .sum-col { width: 24px; }
 .day-col { width: 19px; }
 .legend { font-size: 10px; margin-top: 4px; }
@@ -104,8 +107,11 @@
         <table class="t">
             <thead>
                 <tr>
-                    <th class="card-col">Card No.</th>
+                    <th class="card-col">Employee ID</th>
                     <th class="name-col">Name</th>
+                    <th class="dept-col">Department</th>
+                    <th class="desig-col">Designation</th>
+                    <th class="join-col">Join Date</th>
                     <th class="sum-col">P</th>
                     <th class="sum-col">HD</th>
                     <th class="sum-col">L</th>
@@ -123,6 +129,9 @@
                     <tr>
                         <td>{{ $employee->employee_id }}</td>
                         <td>{{ $employee->name }}</td>
+                        <td>{{ optional($employee->department)->name ?? 'N/A' }}</td>
+                        <td>{{ optional($employee->designation)->name ?? 'N/A' }}</td>
+                        <td class="tc">{{ optional($employee->joining_date)->format('d/m/y') ?? '-' }}</td>
                         <td class="tc">{{ $row['p'] ?? 0 }}</td>
                         <td class="tc">{{ $row['hd'] ?? 0 }}</td>
                         <td class="tc">{{ $row['l'] ?? 0 }}</td>

@@ -27,6 +27,11 @@
                     </div>
 
                     <div class="col-md-3 mb-3">
+                        <label class="mb-1">Employee ID(s) <small class="text-muted">(use , for multiple)</small></label>
+                        <input type="text" name="employee_ids" class="form-control form-control-sm" value="{{ $request->employee_ids }}" placeholder="NIT-0001,NIT-0002">
+                    </div>
+
+                    <div class="col-md-3 mb-3">
                         <label class="mb-1">Classification</label>
                         <select name="classification[]" class="form-control form-control-sm select2" multiple>
                             @foreach($options['classifications'] as $item)
@@ -109,7 +114,7 @@
 
                     <div class="col-md-3 mb-3">
                         <label class="mb-1">Attendance Type</label>
-                        <select name="att_type" class="form-control form-control-sm">
+                        <select name="att_type" id="attTypeSelect" class="form-control form-control-sm">
                             <option value="">All</option>
                             @foreach($attendanceTypes as $key => $label)
                                 <option value="{{ $key }}" @selected($request->att_type === $key)>{{ $label }}</option>
@@ -132,6 +137,10 @@
                             <button type="submit" name="print" value="1" formtarget="_blank" id="reportPrintBtn" class="btn btn-primary btn-sm w-50">
                                 <i class="fa-solid fa-print"></i> Print
                             </button>
+                            <input type="hidden" name="xlsx" id="attXlsxFlag" value="0">
+                            <button type="submit" name="print" value="1" formtarget="_blank" id="attExcelBtn" class="btn btn-success btn-sm ml-2 no-loader {{ $request->att_type === 'MS' ? '' : 'd-none' }}" title="Download the attendance sheet as Excel">
+                                <i class="fa-solid fa-file-excel"></i> Excel
+                            </button>
                         </div>
                     </div>
 
@@ -143,6 +152,23 @@
 @endsection
 
 @push('js')
+<script>
+    // Monthly Attendance Sheet is the only type with a native Excel download: the
+    // Excel button sets xlsx=1 for that one submit, then resets it so Print stays a print.
+    (function () {
+        var select = document.getElementById('attTypeSelect');
+        var excelBtn = document.getElementById('attExcelBtn');
+        var flag = document.getElementById('attXlsxFlag');
+        if (!select || !excelBtn || !flag) { return; }
+        select.addEventListener('change', function () {
+            excelBtn.classList.toggle('d-none', select.value !== 'MS');
+        });
+        excelBtn.addEventListener('click', function () {
+            flag.value = '1';
+            setTimeout(function () { flag.value = '0'; }, 500);
+        });
+    })();
+</script>
 <script>
     (function () {
         var btn = document.getElementById('reportPrintBtn');

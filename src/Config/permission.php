@@ -14,6 +14,10 @@ return [
             'label' => 'Asset Category',
             'permissions' => [ 'list'   => 'List', 'add'    => 'Create', 'edit'   => 'Edit', 'view'   => 'View', 'delete' => 'Delete', 'all'    => 'All', ],
         ],
+        'hr_asset_location' => [
+            'label' => 'Asset Location',
+            'permissions' => [ 'list'   => 'List', 'add'    => 'Create', 'edit'   => 'Edit', 'view'   => 'View', 'delete' => 'Delete', 'all'    => 'All', ],
+        ],
         'hr_block' => [
             'label' => 'Block',
             'permissions' => [ 'list'   => 'List', 'add'    => 'Create', 'edit'   => 'Edit', 'view'   => 'View', 'delete' => 'Delete', 'all'    => 'All', ],
@@ -101,7 +105,7 @@ return [
 
         'hr_employee' => [
             'label' => 'Employee',
-            'permissions' => [ 'list' => 'List', 'add' => 'Create', 'edit' => 'Edit', 'view' => 'View', 'delete' => 'Delete', 'all' => 'All' ],
+            'permissions' => [ 'list' => 'List', 'add' => 'Create', 'edit' => 'Edit', 'view' => 'View', 'delete' => 'Delete', 'export' => 'Export Excel', 'import' => 'Import Excel', 'all' => 'All' ],
         ],
         'hr_attendance' => [
             'label' => 'Attendance',
@@ -116,7 +120,7 @@ return [
             'permissions' => [ 'list' => 'List', 'add' => 'Create', 'edit' => 'Edit', 'view' => 'View', 'all' => 'All' ],
         ],
         'hr_employee_asset' => [
-            'label' => 'Employee Asset Management',
+            'label' => 'Asset Handover',
             'permissions' => [ 'list' => 'List', 'add' => 'Create', 'edit' => 'Edit', 'view' => 'View', 'all' => 'All' ],
         ],
         'hr_conveyance_request' => [
@@ -126,6 +130,14 @@ return [
         'hr_notice' => [
             'label' => 'Notices',
             'permissions' => [ 'list' => 'List', 'add' => 'Create', 'edit' => 'Edit', 'delete' => 'Delete', 'all' => 'All' ],
+        ],
+        'hr_company_asset' => [
+            'label' => 'Asset Management',
+            'permissions' => [ 'list' => 'List', 'add' => 'Create', 'edit' => 'Edit', 'view' => 'View', 'delete' => 'Delete', 'import' => 'Import', 'all' => 'All' ],
+        ],
+        'hr_disciplinary_notice' => [
+            'label' => 'Disciplinary Notice',
+            'permissions' => [ 'list' => 'List', 'add' => 'Create', 'edit' => 'Edit', 'view' => 'View', 'delete' => 'Delete', 'all' => 'All' ],
         ],
         'hr_regular_to_weekend' => [
             'label' => 'Weekend to Regular',
@@ -208,6 +220,10 @@ return [
             'label' => 'Salary Report (Wage)',
             'permissions' => [ 'view' => 'View', 'all'  => 'All',]
         ],
+        'hr_salary_summary_sfl_report' => [
+            'label' => 'Salary Summary SFL',
+            'permissions' => [ 'view' => 'View', 'all'  => 'All',]
+        ],
         'hr_ot_summary_report' => [
             'label' => 'OT Summary Report',
             'permissions' => [ 'view' => 'View', 'all'  => 'All',]
@@ -222,6 +238,10 @@ return [
         ],
         'hr_asset_report' => [
             'label' => 'Asset Report',
+            'permissions' => [ 'view' => 'View', 'all'  => 'All',]
+        ],
+        'hr_company_asset_report' => [
+            'label' => 'Current Asset Report',
             'permissions' => [ 'view' => 'View', 'all'  => 'All',]
         ],
         'pay_slip_report' => [

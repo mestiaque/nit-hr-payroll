@@ -291,7 +291,7 @@
     $joinDateRaw = data_get($employee, 'joining_date') ?? data_get($employee, 'join_date');
     $joinDate = '';
     if ($joinDateRaw) {
-        try {
+        try {   
             $joinDate = $isBangla && function_exists('bn_date')
                 ? bn_date($joinDateRaw, 'd/m/Y')
                 : \Carbon\Carbon::parse($joinDateRaw)->format('d/m/Y');
@@ -327,7 +327,7 @@
 
         {{-- Logo row --}}
         <div class="sfl-logo-area">
-            
+
             <div class="sfl-logo-text">
                 <img src="{{ asset(general()->logo()) }}" alt="{{ $sflCompanyName }}" class="sfl-logo-img">
             </div>
@@ -410,7 +410,7 @@
 
         {{-- Logo row --}}
         <div class="sfl-logo-area" style="padding: 0.5mm 1.5mm;">
-            
+
             <div class="sfl-logo-text">
                 <img src="{{ asset(general()->logo()) }}" alt="{{ $sflCompanyName }}" class="sfl-logo-img">
             </div>

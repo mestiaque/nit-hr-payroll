@@ -3,6 +3,7 @@
 namespace ME\Hr\Http\Controllers;
 
 use ME\Hr\Models\HrEmployee;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
@@ -42,10 +43,53 @@ use ME\Hr\Models\HrEmployeeGatePass;
 use ME\Hr\Models\HrEmployeeAsset;
 use ME\Hr\Models\HrEmployeeLogin;
 use Illuminate\Support\Facades\Storage;
+use ME\Hr\Services\EmployeeExcelService;
 
 class HrEmployeeController extends Controller
 {
+    use AuthorizesRequests;
+
     public function index(Request $request)
+    {
+        $query = $this->filteredEmployeeQuery($request);
+
+        $employees = $query->with('ageVerification')->naturalOrderById()->paginate(20)->appends($request->query());
+
+        $options = $this->options();
+        $basicInfoOptions = [
+            'marital_status' => collect(data_get($options, 'maritalStatuses', []))->pluck('name')->filter()->values()->all(),
+            'gender' => collect(data_get($options, 'sexes', []))->pluck('name')->filter()->values()->all(),
+            'religion' => collect(data_get($options, 'religions', []))->pluck('name')->filter()->values()->all(),
+        ];
+
+        return view('hr::employees.index', [
+            'employees' => $employees,
+            'request' => $request,
+            'options' => $options,
+            'basicInfoOptions' => $basicInfoOptions,
+            'newEmployee' => new HrEmployee(),
+        ]);
+    }
+
+    /**
+     * Excel export of every employee field, honouring the list page's current filters.
+     */
+    public function export(Request $request, EmployeeExcelService $excel)
+    {
+        $this->authorize('hr_employee.export');
+
+        if (!class_exists(\PhpOffice\PhpSpreadsheet\Spreadsheet::class)) {
+            abort(501, 'Excel export requires the phpoffice/phpspreadsheet package. Run "composer require phpoffice/phpspreadsheet" in this application, then try again.');
+        }
+        @set_time_limit(600);
+        @ini_set('memory_limit', '1024M');
+
+        $spreadsheet = $excel->export($this->filteredEmployeeQuery($request)->naturalOrderById());
+
+        return EmployeeImportController::download($spreadsheet, 'employees-'.now()->format('Y-m-d').'.xlsx');
+    }
+
+    private function filteredEmployeeQuery(Request $request)
     {
         $query = HrEmployee::query();
 
@@ -134,22 +178,7 @@ class HrEmployeeController extends Controller
             $query->where('status', $this->normalizeUserStatus((string) $request->is_active));
         }
 
-        $employees = $query->with('ageVerification')->naturalOrderById()->paginate(20)->appends($request->query());
-
-        $options = $this->options();
-        $basicInfoOptions = [
-            'marital_status' => collect(data_get($options, 'maritalStatuses', []))->pluck('name')->filter()->values()->all(),
-            'gender' => collect(data_get($options, 'sexes', []))->pluck('name')->filter()->values()->all(),
-            'religion' => collect(data_get($options, 'religions', []))->pluck('name')->filter()->values()->all(),
-        ];
-
-        return view('hr::employees.index', [
-            'employees' => $employees,
-            'request' => $request,
-            'options' => $options,
-            'basicInfoOptions' => $basicInfoOptions,
-            'newEmployee' => new HrEmployee(),
-        ]);
+        return $query;
     }
      
     public function store(Request $request): RedirectResponse
@@ -188,9 +217,21 @@ class HrEmployeeController extends Controller
         $employee->created_by = Auth::id();
         $employee->setTypes('employee');
         $employee->save();
+        if (general()->company_s_code == 'SFL') {
+            HrEmployeeNominee::create([
+                'employee_id'      => $employee->id,
+                'name'             => '',
+                'net_payment'      => 100,
+                'provident_fund'   => 0,
+                'insurance'        => 100,
+                'accident_fine'    => 100,
+                'profit'           => 0,
+                'others'           => 0,
+            ]);
+        }
         $this->syncDesignationSalaryToEmployee($employee, $payload, true);
 
-        return redirect()->route('hr-center.employees.index')->with('success', 'Employee created successfully.');
+        return redirect()->back()->with('success', 'Employee created successfully.');
     }
 
     public function updateProfile(Request $request, HrEmployee $employee): RedirectResponse
@@ -232,7 +273,7 @@ class HrEmployeeController extends Controller
             uploadFile($request->file('profile_image'), $employee->id, 8, 1, Auth::id());
         }
 
-        return redirect()->route('hr-center.employees.index')->with('success', 'Employee profile updated.');
+        return redirect()->back()->with('success', 'Employee profile updated.');
     }
 
     public function updateSalary(Request $request, HrEmployee $employee): RedirectResponse
@@ -257,7 +298,7 @@ class HrEmployeeController extends Controller
         $employee->setTypes('employee');
         $employee->save();
 
-        return redirect()->route('hr-center.employees.index')->with('success', 'Salary info updated.');
+        return redirect()->back()->with('success', 'Salary info updated.');
     }
 
     /**
@@ -283,7 +324,7 @@ class HrEmployeeController extends Controller
             }
         });
 
-        return redirect()->route('hr-center.employees.index')
+        return redirect()->back()
             ->with('success', "Synced designation salary fields for {$synced} employee(s).");
     }
 
@@ -309,7 +350,7 @@ class HrEmployeeController extends Controller
         $this->upsertAddressInfo($employee, $payload);
         $employee->save();
 
-        return redirect()->route('hr-center.employees.index')->with('success', 'Address info updated.');
+        return redirect()->back()->with('success', 'Address info updated.');
     }
 
     public function updateBasicInfo(Request $request, HrEmployee $employee): RedirectResponse
@@ -455,7 +496,7 @@ class HrEmployeeController extends Controller
         $employee->setTypes('employee');
         $employee->save();
 
-        return redirect()->route('hr-center.employees.index')->with('success', 'Basic info updated.');
+        return redirect()->back()->with('success', 'Basic info updated.');
     }
 
     public function updateNominee(Request $request, HrEmployee $employee): RedirectResponse
@@ -506,7 +547,7 @@ class HrEmployeeController extends Controller
         $employee->setTypes('employee');
         $employee->save();
 
-        return redirect()->route('hr-center.employees.index')->with('success', 'Nominee info updated.');
+        return redirect()->back()->with('success', 'Nominee info updated.');
     }
 
     public function updateAgeVerification(Request $request, HrEmployee $employee): RedirectResponse
@@ -526,7 +567,7 @@ class HrEmployeeController extends Controller
         $employee->setTypes('employee');
         $employee->save();
 
-        return redirect()->route('hr-center.employees.index')->with('success', 'Age verification info updated.');
+        return redirect()->back()->with('success', 'Age verification info updated.');
     }
 
     public function updateResign(Request $request, HrEmployee $employee): RedirectResponse
@@ -547,7 +588,7 @@ class HrEmployeeController extends Controller
         $employee->setTypes('employee');
         $employee->save();
 
-        return redirect()->route('hr-center.employees.index')->with('success', 'Lefty/Resign info updated.');
+        return redirect()->back()->with('success', 'Lefty/Resign info updated.');
     }
 
     public function showResignLetter(HrEmployee $employee)
@@ -594,7 +635,7 @@ class HrEmployeeController extends Controller
             return redirect()->route('hr-center.employees.final-settlement.print.show', $employee);
         }
 
-        return redirect()->route('hr-center.employees.index')->with('success', 'Final settlement info updated.');
+        return redirect()->back()->with('success', 'Final settlement info updated.');
     }
 
     public function showFinalSettlementLetter(HrEmployee $employee)
@@ -1680,7 +1721,7 @@ class HrEmployeeController extends Controller
         $this->ensureEmployee($employee);
         $employee->delete();
 
-        return redirect()->route('hr-center.employees.index')->with('success', 'Employee deleted successfully.');
+        return redirect()->back()->with('success', 'Employee deleted successfully.');
     }
 
     private function ensureEmployee(HrEmployee $employee): void

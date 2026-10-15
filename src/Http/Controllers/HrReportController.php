@@ -21,6 +21,7 @@ use ME\Hr\Models\HrHoliday;
 use ME\Hr\Models\HrLeaveInfo;
 use ME\Hr\Models\HrLock;
 use ME\Hr\Models\HrProductionBonus;
+use ME\Hr\Models\HrSalaryKey;
 use ME\Hr\Models\HrSection;
 use ME\Hr\Models\HrShift;
 use ME\Hr\Models\HrSubSection;
@@ -1553,6 +1554,7 @@ class HrReportController extends Controller
             'joining-letter' => 'Joining Letter',
             'increment-letter' => 'Increment Letter',
             'probaitionary-exten' => 'Probationary Extension',
+            'salary-certificate' => 'Salary Certificate',
         ];
 
         if ($request->boolean('print')) {
@@ -1991,9 +1993,21 @@ class HrReportController extends Controller
         // to lock; creating an empty placeholder row would wrongly flip its derived
         // status elsewhere from "Absent" to "Punch Missing", so that's deliberately
         // not done here).
-        HrAttendance::whereIn('employee_id', $employees->pluck('id'))
+        $affected = HrAttendance::whereIn('employee_id', $employees->pluck('id'))
             ->whereBetween('date', [$from, $to])
             ->update(['is_locked' => true, 'locked_at' => now(), 'locked_by' => Auth::id()]);
+
+        // A query-builder mass update never fires Eloquent events, so
+        // HasAudit can't see it — record it manually instead. Guarded by
+        // class_exists() so this keeps working if mestiaque/audit is ever
+        // removed (see App\Traits\HasAudit for the same defensive pattern).
+        if (class_exists(\ME\Audit\Facades\Audit::class)) {
+            \ME\Audit\Facades\Audit::event('attendance.job_card_locked')
+                ->module('HR')
+                ->feature('Attendance')
+                ->metadata(['from' => $from, 'to' => $to, 'rows_locked' => $affected])
+                ->save();
+        }
 
         return back()->with('success', 'Job card locked for selected period.');
     }
@@ -2015,6 +2029,7 @@ class HrReportController extends Controller
             'PM' => 'Attendance Missing',
             'AS' => 'Attendance Status',
             'LR' => 'Late Report (Detailed)',
+            'MS' => 'Monthly Attendance Sheet',
         ];
 
         if ($request->boolean('print')) {
@@ -2031,6 +2046,10 @@ class HrReportController extends Controller
                 ->orderBy('section_id')
                 ->naturalOrderById()
                 ->get();
+
+            if ($type === 'MS') {
+                return $this->monthlyAttendanceSheet($request, $employees, $from, $to, $options);
+            }
 
             // Build per-employee summary over the date range
             $attendanceByEmployee = $employees->mapWithKeys(function ($employee) use ($from, $to) {
@@ -2236,6 +2255,7 @@ class HrReportController extends Controller
             }
 
             if ($type === 'AS') {
+                $employees->loadMissing(['department', 'designation']);
                 $days = collect();
                 $cursor = \Carbon\Carbon::parse($from)->startOfDay();
                 $end = \Carbon\Carbon::parse($to)->startOfDay();
@@ -2314,6 +2334,61 @@ class HrReportController extends Controller
             'attendanceTypes'  => $attendanceTypes,
             'groupByOptions'   => self::GROUP_BY_OPTIONS,
             'request'          => $request,
+        ]);
+    }
+
+    /**
+     * Employee x day attendance grid (P / L / A / leave code / W / H ...) with totals —
+     * printable, or a colour-coded native .xlsx when ?xlsx=1.
+     */
+    private function monthlyAttendanceSheet(Request $request, $employees, string $from, string $to, array $options)
+    {
+        if ($request->boolean('xlsx')) {
+            if (!class_exists(\PhpOffice\PhpSpreadsheet\Spreadsheet::class)) {
+                abort(501, 'Excel export requires the phpoffice/phpspreadsheet package. Run "composer require phpoffice/phpspreadsheet" in this application, then try again.');
+            }
+            @set_time_limit(600);
+        }
+
+        $sheetService = app(\ME\Hr\Services\MonthlyAttendanceSheetService::class);
+        $employees->loadMissing(['designation', 'department']);
+        $sheet = $sheetService->build($employees, $from, $to);
+
+        $groupBy = $this->resolveGroupBy($request, 'section');
+        [$groupMap, $groupLabel] = $this->groupEmployeeRows($employees, $groupBy, $this->groupByOptionMaps($options), fn ($emp) => $emp);
+        $groups = collect($groupMap)->map(fn ($groupEmployees, $key) => [
+            'label' => $groupBy === 'none' ? null : $groupLabel((string) $key),
+            'employees' => $groupEmployees,
+        ])->values()->all();
+
+        $fromDate = Carbon::parse($from);
+        $toDate = Carbon::parse($to);
+        $meta = [
+            'company' => hr_factory('name') ?? 'Company Name',
+            'address' => hr_factory('address') ?? '',
+            'title' => 'Monthly Attendance Sheet',
+            'period' => $fromDate->format('d-M-Y') . ' to ' . $toDate->format('d-M-Y')
+                . ' (' . $employees->count() . ' Employees)',
+        ];
+
+        if ($request->boolean('xlsx')) {
+            $spreadsheet = $sheetService->spreadsheet($sheet, $groups, $meta);
+            $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+
+            return response()->streamDownload(function () use ($writer) {
+                $writer->save('php://output');
+            }, 'attendance-sheet-' . $fromDate->format('Y-m-d') . '-to-' . $toDate->format('Y-m-d') . '.xlsx', [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ]);
+        }
+
+        return view('hr::reports.monthly-attendance-sheet-print', [
+            'request' => $request,
+            'sheet' => $sheet,
+            'groups' => $groups,
+            'meta' => $meta,
+            'legend' => $sheetService->legend(),
+            'sheetService' => $sheetService,
         ]);
     }
 
@@ -2438,7 +2513,54 @@ class HrReportController extends Controller
             'dateLabel' => $isRange
                 ? Carbon::parse($from)->format('d-M-Y') . ' to ' . Carbon::parse($to)->format('d-M-Y')
                 : Carbon::parse($from)->format('d-M-Y'),
-        ], 'daily-attendance-report');
+        ], 'daily-attendance-report', [$this, 'styleTableSheetXlsx']);
+    }
+
+    /**
+     * Excel polish for multi-table reports (the HTML reader keeps none of the print
+     * CSS): every table row — any row with 2+ filled cells, so merged title/section
+     * rows are left alone — gets thin cell borders; each table's first row (its <th>
+     * header, which the reader doesn't style) is bolded and shaded; and the page
+     * prints landscape, fit to width.
+     */
+    public function styleTableSheetXlsx(\PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet): void
+    {
+        $highestCol = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::columnIndexFromString($sheet->getHighestColumn());
+        $previousWasTableRow = false;
+        foreach ($sheet->getRowIterator() as $row) {
+            $r = $row->getRowIndex();
+            $lastFilled = 0;
+            $filled = 0;
+            for ($c = 1; $c <= $highestCol; $c++) {
+                $value = $sheet->getCell([$c, $r])->getValue();
+                if ($value !== null && $value !== '') {
+                    $filled++;
+                    $lastFilled = $c;
+                }
+            }
+            if ($filled < 2) {
+                $previousWasTableRow = false;
+                continue;
+            }
+            $isHeader = !$previousWasTableRow;
+            $previousWasTableRow = true;
+            $range = 'A' . $r . ':' . \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($lastFilled) . $r;
+            $sheet->getStyle($range)->getBorders()->getAllBorders()
+                ->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN);
+            if ($isHeader) {
+                $sheet->getStyle($range)->getFont()->setBold(true);
+                $sheet->getStyle($range)->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                    ->getStartColor()->setRGB('EEF1D4');
+                $sheet->getStyle($range)->getAlignment()
+                    ->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+            }
+        }
+
+        $sheet->getPageSetup()
+            ->setOrientation(\PhpOffice\PhpSpreadsheet\Worksheet\PageSetup::ORIENTATION_LANDSCAPE)
+            ->setPaperSize(\PhpOffice\PhpSpreadsheet\Worksheet\PageSetup::PAPERSIZE_A4)
+            ->setFitToWidth(1)
+            ->setFitToHeight(0);
     }
 
     public function otSummaryReportScreen(Request $request)
@@ -3397,6 +3519,7 @@ class HrReportController extends Controller
         'production'           => 'Production Salary',
         'bonus'                => 'Bonus Salary',
         'wages-salary-summary' => 'Wages & Salary Summary',
+        'salary-summary-sfl'   => 'Salary Summary SFL',
     ];
 
     private function salaryReportScreen(Request $request, string $report)
@@ -3452,6 +3575,14 @@ class HrReportController extends Controller
     public function wagesSalarySummaryReportScreen(Request $request)
     {
         return $this->salaryReportScreenFor($request, 'wages-salary-summary');
+    }
+
+    /**
+     * Route: GET /reports/salary-summary-sfl (filter form)
+     */
+    public function salarySummarySflReportScreen(Request $request)
+    {
+        return $this->salaryReportScreenFor($request, 'salary-summary-sfl');
     }
 
     private function salaryReportScreenFor(Request $request, string $reportType)
@@ -3543,6 +3674,38 @@ class HrReportController extends Controller
         return $this->viewOrXlsx($request, 'hr::reports.salary-report-print-wages', $payload, 'wages-salary-summary');
     }
 
+    /**
+     * Route: GET /reports/salary-summary-sfl-print
+     *
+     * Suhana Fashions Ltd's own fixed-layout Salary Summary — Management Staff /
+     * Staff / each production Department, in the company's fixed employee_id
+     * badge-block order (1000-12000). Unlike Wages & Salary Summary above, the
+     * bucketing here is hardcoded to that layout (see
+     * SalaryReportService::buildSflSalarySummaryData()), not a selectable Group By axis.
+     */
+    public function salarySummarySflReportPrint(Request $request)
+    {
+        if (!$request->boolean('_render')) {
+            return view('hr::partials.report-loader-render', [
+                'request' => $request,
+            ]);
+        }
+
+        $payload = $this->salaryReportBasePayload($request, 'salary-summary-sfl');
+
+        $payload = array_merge(
+            $payload,
+            SalaryReportService::buildSflSalarySummaryData(
+                $payload['employees'],
+                $payload['from'],
+                $payload['to'],
+                $request
+            )
+        );
+
+        return $this->viewOrXlsx($request, 'hr::reports.salary-report-print-summary-sfl', $payload, 'salary-summary-sfl');
+    }
+
     private function renderSalarySheetReport(Request $request, string $reportType, string $view)
     {
         $payload = $this->salaryReportBasePayload($request, $reportType);
@@ -3576,7 +3739,56 @@ class HrReportController extends Controller
             ]
         );
 
-        return $this->viewOrXlsx($request, $view, $payload, 'salary-sheet-' . $reportType);
+        return $this->viewOrXlsx($request, $view, $payload, 'salary-sheet-' . $reportType, [$this, 'styleSalarySheetXlsx']);
+    }
+
+    /**
+     * Excel polish for the salary sheet export: the HTML reader keeps none of the print
+     * view's CSS, so the column-header row through the Grand Total row gets real cell
+     * borders, a wrapped/bold header, frozen panes (Sl/Card/Name stay visible while
+     * scrolling) and a legal-landscape, fit-to-width print setup.
+     */
+    public function styleSalarySheetXlsx(\PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet): void
+    {
+        $headerRow = null;
+        $lastRow = null;
+        foreach ($sheet->getRowIterator() as $row) {
+            $r = $row->getRowIndex();
+            $label = trim((string) $sheet->getCell('A' . $r)->getValue());
+            if ($headerRow === null && strcasecmp($label, 'Sl-NO') === 0) {
+                $headerRow = $r;
+            } elseif ($headerRow !== null && stripos($label, 'Grand Total') === 0) {
+                $lastRow = $r;
+                break;
+            }
+        }
+        if ($headerRow === null) {
+            return;
+        }
+        $lastRow = $lastRow ?? $headerRow;
+        $lastCol = $sheet->getHighestColumn($headerRow);
+
+        $sheet->getStyle("A{$headerRow}:{$lastCol}{$lastRow}")->getBorders()->getAllBorders()
+            ->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN);
+
+        $header = $sheet->getStyle("A{$headerRow}:{$lastCol}{$headerRow}");
+        $header->getFont()->setBold(true);
+        $header->getAlignment()->setWrapText(true)
+            ->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER)
+            ->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+        $header->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+            ->getStartColor()->setRGB('EFEFEF');
+        $sheet->getRowDimension($headerRow)->setRowHeight(30);
+
+        $sheet->freezePane('D' . ($headerRow + 1));
+
+        $sheet->getPageSetup()
+            ->setOrientation(\PhpOffice\PhpSpreadsheet\Worksheet\PageSetup::ORIENTATION_LANDSCAPE)
+            ->setPaperSize(\PhpOffice\PhpSpreadsheet\Worksheet\PageSetup::PAPERSIZE_LEGAL)
+            ->setFitToWidth(1)
+            ->setFitToHeight(0)
+            ->setRowsToRepeatAtTopByStartAndEnd($headerRow, $headerRow);
+        $sheet->getPageMargins()->setTop(0.3)->setBottom(0.3)->setLeft(0.25)->setRight(0.25);
     }
 
     /**
@@ -3604,6 +3816,21 @@ class HrReportController extends Controller
             $r->id => trim(($r->name ?? '') . (filled($r->slug ?? null) ? ' - ' . $r->slug : '')),
         ]);
 
+        // Salary Date shown on every salary print: an explicit ?salary_date= from
+        // the filter form always wins (this is what lets the same generated
+        // report be printed/re-printed under whatever date the user is actually
+        // disbursing on); with none given, falls back to the active Salary Key's
+        // own payment_date exactly as before, then today.
+        $salaryDateInput = $request->input('salary_date');
+        if (filled($salaryDateInput)) {
+            $salaryDate = Carbon::parse($salaryDateInput)->format('d M Y');
+        } else {
+            $salaryKey = HrSalaryKey::where('status', 'active')->latest('id')->first();
+            $salaryDate = $salaryKey?->payment_date
+                ? Carbon::parse($salaryKey->payment_date)->format('d M Y')
+                : now()->format('d M Y');
+        }
+
         return [
             'request' => $request,
             'employees' => $employees,
@@ -3622,6 +3849,13 @@ class HrReportController extends Controller
             'fromLabel' => Carbon::parse($from)->format('d-M-Y'),
             'toLabel' => Carbon::parse($to)->format('d-M-Y'),
             'reportTypeLabel' => self::SALARY_REPORT_TYPES[$reportType],
+            'salaryDate' => $salaryDate,
+            // Checked -> show real signature lines for manual sign-off; unchecked
+            // (default) -> the report prints its own "system generated, no
+            // signature required" note instead (and the printMaster2 layout's
+            // duplicate copy of that same note is suppressed by each wrapper
+            // view's $hideGeneratedNote, so it's never shown twice).
+            'withSignature' => $request->boolean('with_signature'),
         ];
     }
 

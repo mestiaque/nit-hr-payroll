@@ -9,7 +9,19 @@
     <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center">
             <h4 class="mb-0">Employees</h4>
-            <a href="javascript:void(0)" class="btn btn-primary btn-sm" data-toggle="modal" data-target="#CreateEmployeeModal" title="Create Employee"><i class="fa-solid fa-plus"></i></a>
+            <div class="d-flex gap-2">
+                @can('hr_employee.export')
+                <a href="{{ route('hr-center.employees.export', request()->query()) }}" class="btn btn-light btn-sm mr-1 no-loader" title="Export all employee info (current filter) to Excel">
+                    <i class="fa-solid fa-file-excel"></i> Export Excel
+                </a>
+                @endcan
+                @can('hr_employee.import')
+                <a href="{{ route('hr-center.employees.import') }}" class="btn btn-light btn-sm mr-1" title="Create / update employees from Excel">
+                    <i class="fa-solid fa-file-import"></i> Import Excel
+                </a>
+                @endcan
+                <a href="javascript:void(0)" class="btn btn-primary btn-sm" data-toggle="modal" data-target="#CreateEmployeeModal" title="Create Employee"><i class="fa-solid fa-plus"></i></a>
+            </div>
         </div>
         <div class="card-body">
             @if(session('success'))

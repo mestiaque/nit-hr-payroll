@@ -27,8 +27,20 @@
 @php
     $company = hr_factory('name') ?? 'Company Name';
     $address = hr_factory('address') ?? '';
+    // Excel export: headings are divs, which the HTML->XLSX reader drops into column A
+    // as plain cells (stretching the SL column). In that mode they become full-width
+    // merged rows instead, and the logo is left out.
+    $isExcel = $isExcelExport ?? false;
+    $xlsCols = $isRange ? 5 : 9;
 @endphp
 
+@if($isExcel)
+<table>
+    <tr><td colspan="{{ $xlsCols }}" style="text-align:center;font-weight:bold;font-size:15px;">{{ $company }}</td></tr>
+    <tr><td colspan="{{ $xlsCols }}" style="text-align:center;">{{ $address }}</td></tr>
+    <tr><td colspan="{{ $xlsCols }}" style="text-align:center;font-weight:bold;font-size:12px;">Daily Attendance Report - {{ $dateLabel }}</td></tr>
+</table>
+@else
 <div class="report-head">
     @if(!blank(optional(general())->logo()))
         <img src="{{ asset(optional(general())->logo()) }}" alt="Logo" style="max-height:40px;margin-bottom:4px;">
@@ -38,10 +50,15 @@
 </div>
 
 <div class="sub-title">Daily Attendance Report &mdash; {{ $dateLabel }}</div>
+@endif
 
 @forelse($groups as $groupKey => $groupRows)
     @if($groupBy !== 'none')
-        <div class="section-title">{{ $groupLabel((string) $groupKey) }}</div>
+        @if($isExcel)
+            <table><tr><td colspan="{{ $xlsCols }}" style="font-weight:bold;background-color:#dde6f0;">{{ $groupLabel((string) $groupKey) }}</td></tr></table>
+        @else
+            <div class="section-title">{{ $groupLabel((string) $groupKey) }}</div>
+        @endif
     @endif
 
     @if(!$isRange)
@@ -53,6 +70,7 @@
                     <th>Emp. ID</th>
                     <th>Name</th>
                     <th>Designation</th>
+                    <th>Join Date</th>
                     <th>In Time</th>
                     <th>Out Time</th>
                     <th>Status</th>
@@ -66,6 +84,7 @@
                         <td class="tc">{{ $row['employee_id'] }}</td>
                         <td>{{ $row['name'] }}</td>
                         <td>{{ $row['designation'] }}</td>
+                        <td class="tc">{{ optional($row['employee']->joining_date)->format('d/m/Y') ?? '-' }}</td>
                         <td class="tc">{{ $row['in_time'] }}</td>
                         <td class="tc">{{ $row['out_time'] }}</td>
                         <td class="tc status-{{ \Illuminate\Support\Str::slug($row['status']) }}">{{ $row['status'] }}</td>
@@ -77,7 +96,11 @@
     @else
         {{-- Date range: grouped by employee, one mini-table per employee across the range --}}
         @foreach($groupRows as $row)
-            <div class="emp-block-title">{{ $row['employee_id'] }} &mdash; {{ $row['name'] }} ({{ $row['designation'] }})</div>
+            @if($isExcel)
+                <table><tr><td colspan="{{ $xlsCols }}" style="font-weight:bold;">{{ $row['employee_id'] }} - {{ $row['name'] }} ({{ $row['designation'] }}) - Join Date: {{ optional($row['employee']->joining_date)->format('d/m/Y') ?? '-' }}</td></tr></table>
+            @else
+                <div class="emp-block-title">{{ $row['employee_id'] }} &mdash; {{ $row['name'] }} ({{ $row['designation'] }}) &mdash; Join Date: {{ optional($row['employee']->joining_date)->format('d/m/Y') ?? '-' }}</div>
+            @endif
             <table class="t">
                 <thead>
                     <tr>
@@ -108,7 +131,11 @@
     <p style="text-align:center;color:#888;padding:12px 0;">No employees found.</p>
 @endforelse
 
-<div class="summary-title">Summary</div>
+@if($isExcel)
+    <table><tr><td colspan="{{ $xlsCols }}" style="font-weight:bold;">Summary</td></tr></table>
+@else
+    <div class="summary-title">Summary</div>
+@endif
 <table class="t t-summary">
     <thead>
         <tr>
