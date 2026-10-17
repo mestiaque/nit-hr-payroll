@@ -33,6 +33,10 @@ Route::middleware($route['middleware'] ?? ['web'])
     ->group(function () {
 		// Attendance Management
 		Route::get('/attendances', [\ME\Hr\Http\Controllers\AttendanceController::class, 'index'])->name('attendances.index');
+		Route::get('/attendances/export', [\ME\Hr\Http\Controllers\AttendanceTransferController::class, 'export'])->name('attendances.export');
+		Route::get('/attendances/import', [\ME\Hr\Http\Controllers\AttendanceTransferController::class, 'create'])->name('attendances.import');
+		Route::get('/attendances/import/template', [\ME\Hr\Http\Controllers\AttendanceTransferController::class, 'template'])->name('attendances.import.template');
+		Route::post('/attendances/import', [\ME\Hr\Http\Controllers\AttendanceTransferController::class, 'store'])->name('attendances.import.store');
 		Route::get('/attendances/{user}/{date}/edit', [\ME\Hr\Http\Controllers\AttendanceController::class, 'edit'])->name('attendances.edit');
 		Route::post('/attendances/{employee}/bulk', [\ME\Hr\Http\Controllers\AttendanceController::class, 'bulkUpdate'])->name('attendances.bulk-update');
 		Route::post('/attendances/{user}/{date}', [\ME\Hr\Http\Controllers\AttendanceController::class, 'update'])->name('attendances.update');
@@ -229,6 +233,8 @@ Route::middleware($route['middleware'] ?? ['web'])
 		Route::get('/zkteco-data-import',[AttendanceMachineController::class,'import'])->name('importZkteco');
 		Route::post('/import-zkteco-data',[AttendanceMachineController::class,'importAction'])->name('importZktecoAction');
 		Route::get('/machine-logs', [AttendanceMachineController::class, 'logs'])->name('machine-logs.index');
+		Route::get('/machine-logs/export', [AttendanceMachineController::class, 'export'])->name('machine-logs.export');
+		Route::get('/machine-logs/import/template', [AttendanceMachineController::class, 'importTemplate'])->name('machine-logs.import.template');
 		Route::post('/machine-logs/sync', [AttendanceMachineController::class, 'syncLegacy'])->name('machine-logs.sync');
 	});
 

@@ -139,8 +139,16 @@
     <div class="container-fluid">
         <div class="import-container">
             <div class="card shadow-sm border-0">
-                <div class="card-header bg-white">
-                    <h4 class="card-title text-center">Import ZKTeco Machine Log</h4>
+                <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap" style="gap:8px;">
+                    <h4 class="card-title mb-0">Import Machine Log</h4>
+                    <div class="d-flex flex-wrap" style="gap:6px;">
+                        <a href="{{ route('hr-center.machine-logs.import.template') }}" class="btn btn-sm btn-outline-success">
+                            <i class="fa fa-file-excel mr-1"></i> Template
+                        </a>
+                        <a href="{{ route('hr-center.machine-logs.index') }}" class="btn btn-sm btn-outline-info">
+                            <i class="fa fa-list-alt mr-1"></i> Machine Log
+                        </a>
+                    </div>
                 </div>
                 <div class="card-body">
 
@@ -148,8 +156,11 @@
                     <div class="instruction-card shadow-sm">
                         <h6><i class="fa fa-info-circle mr-1"></i> Instructions:</h6>
                         <small class="text-muted">
-                            1. Upload the .txt or .dat file exported from your biometric machine. <br>
-                            2. Data format must be: ID, Date, Time, Terminal ID.
+                            1. Upload the <strong>.dat / .txt</strong> file from your biometric machine (ID, Date, Time, Terminal ID per line),
+                               or a <strong>.xlsx / .csv</strong> file with an <em>Employee ID</em> and <em>Log Time</em> column (see Template). <br>
+                            2. A file exported from the Machine Log screen can be imported back as-is. <br>
+                            3. Punches already in the system are skipped, so uploading the same file twice is safe. <br>
+                            4. Each punch is applied to attendance using the employee's shift (In / Out window, Late, OT).
                         </small>
                     </div>
 
@@ -158,7 +169,7 @@
 
                         <!-- Drag & Drop Area -->
                         <div class="upload-area" id="dropArea">
-                            <input type="file" name="attendance_file" id="attendance_file" accept=".txt,.dat">
+                            <input type="file" name="attendance_file" id="attendance_file" accept=".txt,.dat,.csv,.xlsx,.xls" required>
                             <div class="upload-icon">
                                 <i class="fa fa-upload"></i>
                             </div>
@@ -182,6 +193,10 @@
                             </div>
                         </div>
 
+                        @error('attendance_file')
+                            <div class="text-danger small mt-2">{{ $message }}</div>
+                        @enderror
+
                         <div class="text-center mt-3">
                             <button type="submit" class="btn btn-import shadow-sm" id="submitBtn">
                                 <i class="fa fa-upload mr-1"></i> Start Import
@@ -190,6 +205,10 @@
                     </form>
                 </div>
             </div>
+        </div>
+
+        <div class="import-container" style="margin-top:0;">
+            @include('hr::attendances.partials.import-result')
         </div>
 
         <!-- ADMS API Info Card -->
@@ -319,9 +338,9 @@ Authorization: Bearer &lt;token&gt;</pre>
                             <div class="col-12">
                                 <div class="guideline-section">
                                     <h5>Installation</h5>
-                                    <div class=”smart-list”>
-                                        <div class=”smart-list-item”><span class=”smart-icon”><i class=”fa fa-play”></i></span> Download and run the installer <a href=”{{ url(‘admin/download/zk-installer’) }}” download class=”btn btn-import btn-sm”><i class=”fa fa-download”> &nbsp; Download</i></a></div>
-                                        <div class=”smart-list-item”><span class=”smart-icon”><i class=”fa fa-cogs”></i></span> If you see “Don’t run” during installation, click “More info” then “Run anyway”.</div>
+                                    <div class="smart-list">
+                                        <div class="smart-list-item"><span class="smart-icon"><i class="fa fa-play"></i></span> Download and run the installer <a href="{{ url('admin/download/zk-installer') }}" download class="btn btn-import btn-sm"><i class="fa fa-download"> &nbsp; Download</i></a></div>
+                                        <div class="smart-list-item"><span class="smart-icon"><i class="fa fa-cogs"></i></span> If you see &ldquo;Don&rsquo;t run&rdquo; during installation, click &ldquo;More info&rdquo; then &ldquo;Run anyway&rdquo;.</div>
                                     </div>
 
                                 </div>

@@ -15,6 +15,7 @@ use ME\Hr\Models\HrAttendanceReplaceOff;
 use ME\Hr\Models\HrEmployee;
 use ME\Hr\Models\HrLock;
 use ME\Hr\Models\HrShift;
+use ME\Hr\Services\AttendanceTransferService;
 use ME\Hr\Services\EmployeeAttendanceService;
 
 class AttendanceMachineController extends Controller
@@ -109,7 +110,25 @@ class AttendanceMachineController extends Controller
      */
     public function logs(Request $request)
     {
-        $query = HrAttendanceMachineLog::query()->orderByDesc('log_time');
+        $query = $this->filteredLogsQuery($request)->orderByDesc('log_time');
+
+        $logs = $query->paginate(50)->withQueryString();
+
+        // Map employee_id (device string) → hr_employees record for display
+        $employeeIds = $logs->pluck('employee_id')->unique()->filter();
+        $employees   = HrEmployee::whereIn('employee_id', $employeeIds)
+                          ->get(['id', 'employee_id', 'name'])
+                          ->keyBy('employee_id');
+
+        $sources       = HrAttendanceMachineLog::select('source')->distinct()->whereNotNull('source')->pluck('source');
+        $verifyMethods = HrAttendanceMachineLog::select('type_name')->distinct()->whereNotNull('type_name')->pluck('type_name');
+
+        return view('hr::attendances.machineLog', compact('logs', 'employees', 'sources', 'verifyMethods'));
+    }
+
+    private function filteredLogsQuery(Request $request)
+    {
+        $query = HrAttendanceMachineLog::query();
 
         if ($search = $request->input('search')) {
             $query->where(function ($q) use ($search) {
@@ -130,18 +149,92 @@ class AttendanceMachineController extends Controller
             $query->where('type_name', $verifyMethod);
         }
 
-        $logs = $query->paginate(50)->withQueryString();
+        return $query;
+    }
 
-        // Map employee_id (device string) → hr_employees record for display
-        $employeeIds = $logs->pluck('employee_id')->unique()->filter();
-        $employees   = HrEmployee::whereIn('employee_id', $employeeIds)
-                          ->get(['id', 'employee_id', 'name'])
-                          ->keyBy('employee_id');
+    /**
+     * Download the (filtered) machine logs. format=xlsx|csv, or dat for the
+     * headerless ZKTeco attlog layout (ID  date time  device  type) that this
+     * screen's own importer — and most attendance software — reads back.
+     */
+    public function export(Request $request, AttendanceTransferService $files)
+    {
+        @set_time_limit(600);
+        @ini_set('memory_limit', '1024M');
 
-        $sources       = HrAttendanceMachineLog::select('source')->distinct()->whereNotNull('source')->pluck('source');
-        $verifyMethods = HrAttendanceMachineLog::select('type_name')->distinct()->whereNotNull('type_name')->pluck('type_name');
+        $format = strtolower((string) $request->input('format', 'xlsx'));
+        $query = $this->filteredLogsQuery($request)->orderBy('log_time')->orderBy('id');
+        $stamp = now()->format('Y-m-d_His');
 
-        return view('hr::attendances.machineLog', compact('logs', 'employees', 'sources', 'verifyMethods'));
+        $toRow = fn (HrAttendanceMachineLog $log) => [
+            $log->employee_id,
+            Carbon::parse($log->log_time)->format('Y-m-d H:i:s'),
+            $log->device_sn,
+            $log->type_code,
+            $log->type_name,
+            $log->source,
+            $log->work_code,
+        ];
+
+        if ($format === 'dat') {
+            return $files->downloadDelimited("machine-logs-{$stamp}.dat", null, function ($write) use ($query) {
+                $query->chunkById(2000, function ($logs) use ($write) {
+                    foreach ($logs as $log) {
+                        $time = Carbon::parse($log->log_time);
+                        $write([$log->employee_id, $time->format('Y-m-d'), $time->format('H:i:s'), $log->device_sn, $log->type_code]);
+                    }
+                });
+            }, "\t");
+        }
+
+        if ($format === 'csv' || !AttendanceTransferService::spreadsheetAvailable()) {
+            return $files->downloadDelimited("machine-logs-{$stamp}.csv", array_values(AttendanceTransferService::MACHINE_LOG_COLUMNS), function ($write) use ($query, $toRow) {
+                $query->chunkById(2000, function ($logs) use ($write, $toRow) {
+                    foreach ($logs as $log) {
+                        $write($toRow($log));
+                    }
+                });
+            });
+        }
+
+        $rows = (function () use ($query, $toRow) {
+            foreach ($query->lazyById(2000) as $log) {
+                yield $toRow($log);
+            }
+        })();
+
+        return $files->downloadSpreadsheet(
+            $files->buildSpreadsheet('Machine Logs', array_values(AttendanceTransferService::MACHINE_LOG_COLUMNS), $rows),
+            "machine-logs-{$stamp}.xlsx"
+        );
+    }
+
+    public function importTemplate(AttendanceTransferService $files)
+    {
+        $sample = [
+            ['1001', now()->subDay()->format('Y-m-d') . ' 08:55:12', 'ZK-001', '0', 'fingerprint', 'manual', '0'],
+            ['1001', now()->subDay()->format('Y-m-d') . ' 18:05:40', 'ZK-001', '1', 'fingerprint', 'manual', '0'],
+        ];
+        $notes = [
+            'Machine log import — one row per punch.',
+            'Required: Employee ID (same ID as on the machine / HR employee list) and Log Time.',
+            'Log Time formats: 2026-09-01 08:55:12, 01/09/2026 08:55, 01-09-2026 8:55 AM, or an Excel date-time cell.',
+            'You may also use separate "Date" and "Time" columns instead of "Log Time".',
+            'Optional: Device SN, Type Code, Verify Method, Source, Work Code.',
+            'A punch already in the system (same Employee ID + Log Time) is skipped, so re-uploading the same file is safe.',
+            'Punches are applied to attendance using each employee\'s shift windows (first in-window punch = In, last out-window punch = Out).',
+        ];
+
+        if (!AttendanceTransferService::spreadsheetAvailable()) {
+            return $files->downloadDelimited('machine-log-import-template.csv', array_values(AttendanceTransferService::MACHINE_LOG_COLUMNS), function ($write) use ($sample) {
+                array_map($write, $sample);
+            });
+        }
+
+        return $files->downloadSpreadsheet(
+            $files->buildSpreadsheet('Machine Logs', array_values(AttendanceTransferService::MACHINE_LOG_COLUMNS), $sample, $notes),
+            'machine-log-import-template.xlsx'
+        );
     }
 
     /**
@@ -364,34 +457,162 @@ class AttendanceMachineController extends Controller
         return view('hr::attendances.logImport');
     }
 
-    public function importAction(Request $request)
+    /**
+     * Upload a machine export (.dat/.txt from the device, or .csv/.xlsx — including a
+     * file downloaded from this screen's Export). Every valid punch is stored in
+     * hr_attendance_machine_logs (skipping ones already there) and, when the employee
+     * is found, applied to attendance through the same shift-window logic as the live
+     * machine push. Reports exactly what was imported, skipped and why.
+     */
+    public function importAction(Request $request, AttendanceTransferService $files)
     {
         $request->validate([
-            'attendance_file' => 'required|file|mimes:txt,csv,dat|max:5120',
+            'attendance_file' => 'required|file|mimes:txt,csv,dat,xlsx,xls|max:20480',
+        ], [
+            'attendance_file.mimes' => 'Only .dat, .txt, .csv, .xlsx or .xls files can be imported.',
         ]);
 
-        $fileData = file(
-            $request->file('attendance_file')->getRealPath(),
-            FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES
-        );
+        @set_time_limit(900);
+        @ini_set('memory_limit', '1024M');
 
-        $count = 0;
-        foreach ($fileData as $line) {
-            $parts = array_values(array_filter(preg_split('/\s+|,/', trim($line)), fn($p) => $p !== ''));
+        $rows = $files->readRows($request->file('attendance_file'));
+        $header = $files->extractHeaderMap($rows, ['employee_id', 'log_time', 'date', 'device_sn', 'type_code', 'type_name', 'source', 'work_code']);
 
-            if (count($parts) >= 2) {
-                $userId    = $parts[0];
-                $timestamp = count($parts) >= 3 ? ($parts[1] . ' ' . $parts[2]) : $parts[1];
-                $sn        = $parts[3] ?? null;
-                $typeCode  = $parts[4] ?? null;
+        $employees = HrEmployee::with(['shift', 'shiftRule.altShift'])->get()->keyBy('employee_id');
+        $stats = ['total' => 0, 'imported' => 0, 'duplicate' => 0, 'invalid' => 0, 'unmatched' => 0, 'attendance' => 0];
+        $problems = [];
+        $seen = [];
 
-                $this->saveMachineLog($userId, $timestamp, $sn, 'Manual_Import', $typeCode);
-                $this->saveAttendance($userId, $timestamp, $sn, 'Manual_Import');
-                $count++;
+        foreach ($rows as $row) {
+            $stats['total']++;
+            $punch = $this->parseImportedPunch($row['cells'], $header, $files);
+
+            if (!$punch['employee_id'] || !$punch['log_time']) {
+                $stats['invalid']++;
+                $problems[] = [$row['line'], $punch['employee_id'] ?: '-', $punch['employee_id'] ? 'Date/time could not be read' : 'Employee ID is missing'];
+                continue;
+            }
+
+            $key = $punch['employee_id'] . '|' . $punch['log_time'];
+            if (isset($seen[$key]) || HrAttendanceMachineLog::where('employee_id', $punch['employee_id'])->where('log_time', $punch['log_time'])->exists()) {
+                $stats['duplicate']++;
+                $seen[$key] = true;
+                continue;
+            }
+            $seen[$key] = true;
+
+            HrAttendanceMachineLog::create([
+                'device_sn'   => $punch['device_sn'],
+                'employee_id' => $punch['employee_id'],
+                'log_time'    => $punch['log_time'],
+                'type_code'   => $punch['type_code'],
+                'type_name'   => $punch['type_name'] ?: 'Manual_Import',
+                'source'      => $punch['source'] ?: 'file_import',
+                'work_code'   => $punch['work_code'],
+                'received_at' => now(),
+                'created_by'  => auth()->id(),
+            ]);
+            $stats['imported']++;
+
+            $employee = $employees->get($punch['employee_id']);
+            if (!$employee) {
+                $stats['unmatched']++;
+                $problems[] = [$row['line'], $punch['employee_id'], 'Log saved, but no employee has this ID — attendance not updated'];
+                continue;
+            }
+
+            try {
+                $time = Carbon::parse($punch['log_time'], 'Asia/Dhaka');
+                $shift = $employee->resolveShiftForDate($time->toDateString())
+                    ?? $this->resolveShiftFromRoster($employee, $time->toDateString());
+
+                if ($this->applyPunchToAttendance($employee, $time, $shift, $punch['device_sn'], $punch['type_name'] ?: 'Manual_Import')) {
+                    $stats['attendance']++;
+                }
+            } catch (\Throwable $e) {
+                Log::error('Machine log import: attendance update failed', ['punch' => $punch, 'error' => $e->getMessage()]);
+                $problems[] = [$row['line'], $punch['employee_id'], 'Log saved, but attendance update failed: ' . $e->getMessage()];
             }
         }
 
-        return redirect()->back()->with('success', "$count টি ডাটা সফলভাবে প্রসেস করা হয়েছে।");
+        $result = [
+            'title' => 'Machine log import finished',
+            'stats' => [
+                'Rows in file'             => $stats['total'],
+                'New punches saved'        => $stats['imported'],
+                'Already existed (skipped)' => $stats['duplicate'],
+                'Invalid rows'             => $stats['invalid'],
+                'Employee not found'       => $stats['unmatched'],
+                'Attendance days updated'  => $stats['attendance'],
+            ],
+            'problems' => array_slice($problems, 0, 200),
+            'more'     => max(0, count($problems) - 200),
+        ];
+
+        $flash = $stats['imported'] > 0 ? 'success' : 'error';
+        $message = $stats['imported'] > 0
+            ? "{$stats['imported']} new punch(es) imported, attendance updated for {$stats['attendance']} punch(es)."
+            : ($stats['total'] === 0 ? 'The file has no rows to import.' : 'No new punches were imported — see the details below.');
+
+        return redirect()->route('hr-center.importZkteco')->with($flash, $message)->with('import_result', $result);
+    }
+
+    /**
+     * Header-based files map by column name; headerless ZKTeco .dat/.txt keep the
+     * original positional layout: ID, date, time, device SN, type code.
+     */
+    private function parseImportedPunch(array $cells, ?array $header, AttendanceTransferService $files): array
+    {
+        $get = fn (string $field) => isset($header[$field]) ? trim((string) ($cells[$header[$field]] ?? '')) : '';
+
+        if ($header) {
+            // Separate "Date" + "Time" columns ("Time" lands in log_time via the header map),
+            // or a single combined date-time column under either name.
+            $logTime = null;
+            if ($get('date') !== '' && $get('log_time') !== '') {
+                $logTime = $files->normalizeDateTime($get('date'), $get('log_time'));
+            }
+            $logTime ??= $files->normalizeDateTime($get('log_time')) ?? $files->normalizeDateTime($get('date'));
+
+            return [
+                'employee_id' => $get('employee_id'),
+                'log_time'    => $logTime,
+                'device_sn'   => $get('device_sn') ?: null,
+                'type_code'   => $get('type_code') ?: null,
+                'type_name'   => $get('type_name') ?: null,
+                'source'      => $get('source') ?: null,
+                'work_code'   => $get('work_code') ?: null,
+            ];
+        }
+
+        $cells = array_values(array_filter($cells, fn ($c) => $c !== ''));
+        $employeeId = $cells[0] ?? '';
+        $logTime = null;
+        $next = 2;
+
+        if (isset($cells[1])) {
+            $logTime = isset($cells[2]) ? $files->normalizeDateTime($cells[1], $cells[2]) : null;
+            if ($logTime) {
+                $next = 3;
+            } else {
+                $logTime = $files->normalizeDateTime($cells[1]);
+            }
+            // "01/09/2026 08:55 AM" splits into three parts
+            if ($logTime && isset($cells[$next]) && in_array(strtoupper($cells[$next]), ['AM', 'PM'], true)) {
+                $logTime = $files->normalizeDateTime($cells[1], $cells[2] . ' ' . $cells[$next]);
+                $next++;
+            }
+        }
+
+        return [
+            'employee_id' => $employeeId,
+            'log_time'    => $logTime,
+            'device_sn'   => $cells[$next] ?? null,
+            'type_code'   => $cells[$next + 1] ?? null,
+            'type_name'   => null,
+            'source'      => null,
+            'work_code'   => null,
+        ];
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────

@@ -35,9 +35,21 @@
     <div class="card">
         <div class="card-header bg-white d-flex justify-content-between align-items-center">
             <h5 class="mb-0">Attendance List</h5>
-            <a href="{{ route('hr-center.machine-logs.index') }}" class="btn btn-sm btn-outline-info">
-                <i class="fa fa-list-alt mr-1"></i> Machine Log
-            </a>
+            <div class="d-flex flex-wrap" style="gap:6px;">
+                @php $exportQuery = request()->only(['employee', 'department', 'section', 'sub_section', 'classification', 'designation', 'status', 'date', 'date_from', 'date_to']); @endphp
+                <div class="btn-group btn-group-sm" role="group" aria-label="Export">
+                    <a href="{{ route('hr-center.attendances.export', $exportQuery + ['format' => 'xlsx']) }}" class="btn btn-outline-success" title="Export the filtered attendance to Excel">
+                        <i class="fa fa-file-excel mr-1"></i> Export Excel
+                    </a>
+                    <a href="{{ route('hr-center.attendances.export', $exportQuery + ['format' => 'csv']) }}" class="btn btn-outline-success">CSV</a>
+                </div>
+                <a href="{{ route('hr-center.attendances.import') }}" class="btn btn-sm btn-outline-secondary">
+                    <i class="fa fa-upload mr-1"></i> Import
+                </a>
+                <a href="{{ route('hr-center.machine-logs.index') }}" class="btn btn-sm btn-outline-info">
+                    <i class="fa fa-list-alt mr-1"></i> Machine Log
+                </a>
+            </div>
         </div>
         <div class="card-body">
 

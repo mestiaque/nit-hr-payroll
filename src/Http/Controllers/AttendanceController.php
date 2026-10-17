@@ -32,52 +32,7 @@ class AttendanceController extends Controller
 
         $options = \ME\Hr\Services\HrOptionsService::getOptions();
 
-        $employees = HrEmployee::query();
-        if ($employee) {
-            $employees->where(function($q) use ($employee) {
-                $q->where('name', 'like', "%$employee%")
-                  ->orWhere('employee_id', 'like', "%$employee%")
-                  ->orWhere('personal_contact', 'like', "%$employee%")
-                  ;
-            });
-        }
-
-        if ($request->filled('department')) {
-            $values = array_filter(array_map('intval', (array) $request->department));
-            if (!empty($values)) {
-                $employees->whereIn('department_id', $values);
-            }
-        }
-
-        if ($request->filled('section')) {
-            $values = array_filter(array_map('intval', (array) $request->section));
-            if (!empty($values)) {
-                $employees->whereIn('section_id', $values);
-            }
-        }
-
-        if ($request->filled('sub_section')) {
-            $values = array_filter(array_map('intval', (array) $request->sub_section));
-            if (!empty($values)) {
-                $employees->whereIn('sub_section_id', $values);
-            }
-        }
-
-        if ($request->filled('classification')) {
-            $values = array_filter(array_map('intval', (array) $request->classification));
-            if (!empty($values)) {
-                $employees->whereIn('classification_id', $values);
-            }
-        }
-
-        if ($request->filled('designation')) {
-            $values = array_filter(array_map('intval', (array) $request->designation));
-            if (!empty($values)) {
-                $employees->whereIn('designation_id', $values);
-            }
-        }
-
-        $employees = $employees->naturalOrderById()->get();
+        $employees = self::filteredEmployeesQuery($request)->naturalOrderById()->get();
 
         // Determine date range
         if ($dateFrom && $dateTo) {
@@ -202,6 +157,62 @@ class AttendanceController extends Controller
         return view('hr::attendances.index', compact('attendanceList', 'date', 'status', 'employee', 'dateFrom', 'dateTo', 'options'));
     }
 
+    /**
+     * Employee filter shared by the Attendance List and its Excel export
+     * (employee text + department/section/sub-section/classification/designation).
+     */
+    public static function filteredEmployeesQuery(Request $request)
+    {
+        $employee = $request->input('employee');
+
+        $employees = HrEmployee::query();
+        if ($employee) {
+            $employees->where(function($q) use ($employee) {
+                $q->where('name', 'like', "%$employee%")
+                  ->orWhere('employee_id', 'like', "%$employee%")
+                  ->orWhere('personal_contact', 'like', "%$employee%")
+                  ;
+            });
+        }
+
+        if ($request->filled('department')) {
+            $values = array_filter(array_map('intval', (array) $request->department));
+            if (!empty($values)) {
+                $employees->whereIn('department_id', $values);
+            }
+        }
+
+        if ($request->filled('section')) {
+            $values = array_filter(array_map('intval', (array) $request->section));
+            if (!empty($values)) {
+                $employees->whereIn('section_id', $values);
+            }
+        }
+
+        if ($request->filled('sub_section')) {
+            $values = array_filter(array_map('intval', (array) $request->sub_section));
+            if (!empty($values)) {
+                $employees->whereIn('sub_section_id', $values);
+            }
+        }
+
+        if ($request->filled('classification')) {
+            $values = array_filter(array_map('intval', (array) $request->classification));
+            if (!empty($values)) {
+                $employees->whereIn('classification_id', $values);
+            }
+        }
+
+        if ($request->filled('designation')) {
+            $values = array_filter(array_map('intval', (array) $request->designation));
+            if (!empty($values)) {
+                $employees->whereIn('designation_id', $values);
+            }
+        }
+
+        return $employees;
+    }
+
     public function edit($userId, $date)
     {
         $attendance = HrAttendance::where('employee_id', $userId)->where('date', $date)->first();
@@ -214,7 +225,7 @@ class AttendanceController extends Controller
      * Mirrors EmployeeAttendanceService::getEmployeeAttendanceByDate()'s cutoff —
      * a resigned/lefty employee has no attendance past their exit date.
      */
-    private function resolveExitedAt(HrEmployee $employee): ?Carbon
+    public static function resolveExitedAt(HrEmployee $employee): ?Carbon
     {
         $status = strtolower((string) ($employee->employment_status ?? ''));
         if (in_array($status, ['lefty', 'left', 'resign', 'resigned'], true) && !blank($employee->exited_at)) {
@@ -227,7 +238,7 @@ class AttendanceController extends Controller
      * A row can be individually locked (bulk-locked period touched it), or the
      * whole period can be locked with no row yet existing for this date — check both.
      */
-    private function isAttendanceLocked(HrEmployee $employee, string $date, ?HrAttendance $attendance): bool
+    public static function isAttendanceLocked(HrEmployee $employee, string $date, ?HrAttendance $attendance): bool
     {
         if ($attendance && $attendance->is_locked) {
             return true;
@@ -253,37 +264,7 @@ class AttendanceController extends Controller
         $attendance->in_time = $request->input('in_time');
         $attendance->out_time = $request->input('out_time');
         $attendance->remarks = $request->input('remarks');
-        $attendance->status = $this->calculateStatus($attendance, $shift);
-        
-        // Calculate overtime minutes: out_time - shift closing time if out_time is after shift end,
-        // minus the factory's configured OT grace period (minutes past shift end before OT starts counting).
-        if ($attendance->out_time && $shift) {
-            $outTime = Carbon::parse($attendance->out_time);
-            $shiftEnd = Carbon::parse($shift->end_time);
-            if ($outTime->gt($shiftEnd)) {
-                $graceMinutes = EmployeeAttendanceService::resolveOtGraceMinutes($employee);
-                $minutesPastGrace = max(0, (int) $shiftEnd->diffInMinutes($outTime) - $graceMinutes);
-                $attendance->total_ot_minute = EmployeeAttendanceService::applyMinimumOtBucketing($minutesPastGrace);
-            } else {
-                $attendance->total_ot_minute = 0;
-            }
-        } else {
-            $attendance->total_ot_minute = 0;
-        }
-
-        // Full worked duration — this is what the WPHP (weekend-to-regular full-day-OT)
-        // rule in EmployeeAttendanceService reads; without it that feature silently no-ops
-        // for any manually-entered attendance row.
-        if ($attendance->in_time && $attendance->out_time) {
-            $inTime  = Carbon::parse($attendance->in_time);
-            $outTime = Carbon::parse($attendance->out_time);
-            if ($outTime->lt($inTime)) {
-                $outTime->addDay(); // overnight shift
-            }
-            $attendance->total_working_minute = (int) $inTime->diffInMinutes($outTime);
-        } else {
-            $attendance->total_working_minute = 0;
-        }
+        self::applyManualTimes($attendance, $employee, $shift);
 
         $attendance->save();
 
@@ -318,32 +299,7 @@ class AttendanceController extends Controller
             $attendance->in_time  = $row['in_time']  ?: null;
             $attendance->out_time = $row['out_time'] ?: null;
             $attendance->remarks  = $row['remarks']  ?? null;
-            $attendance->status   = $this->calculateStatus($attendance, $shift);
-
-            if ($attendance->out_time && $shift) {
-                $outTime  = Carbon::parse($attendance->out_time);
-                $shiftEnd = Carbon::parse($shift->end_time);
-                if ($outTime->gt($shiftEnd)) {
-                    $graceMinutes = EmployeeAttendanceService::resolveOtGraceMinutes($employee);
-                    $minutesPastGrace = max(0, (int) $shiftEnd->diffInMinutes($outTime) - $graceMinutes);
-                    $attendance->total_ot_minute = EmployeeAttendanceService::applyMinimumOtBucketing($minutesPastGrace);
-                } else {
-                    $attendance->total_ot_minute = 0;
-                }
-            } else {
-                $attendance->total_ot_minute = 0;
-            }
-
-            if ($attendance->in_time && $attendance->out_time) {
-                $inTime  = Carbon::parse($attendance->in_time);
-                $outTime = Carbon::parse($attendance->out_time);
-                if ($outTime->lt($inTime)) {
-                    $outTime->addDay();
-                }
-                $attendance->total_working_minute = (int) $inTime->diffInMinutes($outTime);
-            } else {
-                $attendance->total_working_minute = 0;
-            }
+            self::applyManualTimes($attendance, $employee, $shift);
 
             $attendance->save();
         }
@@ -360,6 +316,46 @@ class AttendanceController extends Controller
             $message .= " ({$skippedLocked} locked date(s) were skipped.)";
         }
         return redirect()->route('hr-center.attendances.index', $query)->with('success', $message);
+    }
+
+    /**
+     * Derives status, OT minutes and worked minutes from a manually entered
+     * in_time/out_time — shared by single edit, bulk edit and Excel import so all
+     * three produce identical rows.
+     */
+    public static function applyManualTimes(HrAttendance $attendance, HrEmployee $employee, ?HrShift $shift): void
+    {
+        $attendance->status = self::calculateStatus($attendance, $shift);
+
+        // Calculate overtime minutes: out_time - shift closing time if out_time is after shift end,
+        // minus the factory's configured OT grace period (minutes past shift end before OT starts counting).
+        if ($attendance->out_time && $shift) {
+            $outTime = Carbon::parse($attendance->out_time);
+            $shiftEnd = Carbon::parse($shift->end_time);
+            if ($outTime->gt($shiftEnd)) {
+                $graceMinutes = EmployeeAttendanceService::resolveOtGraceMinutes($employee);
+                $minutesPastGrace = max(0, (int) $shiftEnd->diffInMinutes($outTime) - $graceMinutes);
+                $attendance->total_ot_minute = EmployeeAttendanceService::applyMinimumOtBucketing($minutesPastGrace);
+            } else {
+                $attendance->total_ot_minute = 0;
+            }
+        } else {
+            $attendance->total_ot_minute = 0;
+        }
+
+        // Full worked duration — this is what the WPHP (weekend-to-regular full-day-OT)
+        // rule in EmployeeAttendanceService reads; without it that feature silently no-ops
+        // for any manually-entered attendance row.
+        if ($attendance->in_time && $attendance->out_time) {
+            $inTime  = Carbon::parse($attendance->in_time);
+            $outTime = Carbon::parse($attendance->out_time);
+            if ($outTime->lt($inTime)) {
+                $outTime->addDay(); // overnight shift
+            }
+            $attendance->total_working_minute = (int) $inTime->diffInMinutes($outTime);
+        } else {
+            $attendance->total_working_minute = 0;
+        }
     }
 
     /**

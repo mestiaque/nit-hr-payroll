@@ -23,7 +23,18 @@
     <div class="card shadow-sm border-0">
         <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
             <h5 class="mb-0"><i class="fa fa-list-alt mr-2 text-info"></i> Machine Attendance Log</h5>
-            <div class="d-flex gap-2">
+            <div class="d-flex flex-wrap gap-2" style="gap:6px;">
+                @php $exportQuery = request()->only(['search', 'date_from', 'date_to', 'source', 'verify_method']); @endphp
+                <div class="btn-group btn-group-sm" role="group" aria-label="Export">
+                    <a href="{{ route('hr-center.machine-logs.export', $exportQuery + ['format' => 'xlsx']) }}" class="btn btn-outline-success" title="Export the filtered logs to Excel">
+                        <i class="fa fa-file-excel mr-1"></i> Excel
+                    </a>
+                    <a href="{{ route('hr-center.machine-logs.export', $exportQuery + ['format' => 'csv']) }}" class="btn btn-outline-success" title="Export the filtered logs to CSV">CSV</a>
+                    <a href="{{ route('hr-center.machine-logs.export', $exportQuery + ['format' => 'dat']) }}" class="btn btn-outline-success" title="ZKTeco .dat layout (ID, date, time, device, type)">.dat</a>
+                </div>
+                <a href="{{ route('hr-center.importZkteco') }}" class="btn btn-sm btn-outline-secondary">
+                    <i class="fa fa-upload mr-1"></i> Import
+                </a>
                 <form method="POST" action="{{ route('hr-center.machine-logs.sync') }}" class="d-inline">
                     @csrf
                     <button type="submit" class="btn btn-sm btn-success" onclick="return confirm('Pull any new machine logs over from the legacy system?')">
