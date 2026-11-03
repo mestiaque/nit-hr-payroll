@@ -2351,7 +2351,7 @@ class HrReportController extends Controller
         }
 
         $sheetService = app(\ME\Hr\Services\MonthlyAttendanceSheetService::class);
-        $employees->loadMissing(['designation', 'department']);
+        $employees->loadMissing(['designation', 'department', 'imageFile']);
         $sheet = $sheetService->build($employees, $from, $to);
 
         $groupBy = $this->resolveGroupBy($request, 'section');

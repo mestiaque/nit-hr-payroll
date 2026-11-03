@@ -51,7 +51,7 @@ th{ font-size: 9px; }
 @php
 	$company = hr_factory('name') ?? 'Company Name';
 	$address = hr_factory('address') ?? '';
-	$totalCols = ($withPicture ? 31 : 30) + $leaveInfos->count();
+	$totalCols = ($withPicture ? 33 : 32) + $leaveInfos->count();
 	$labelCols = $withPicture ? 8 : 7;
 	// Excel export: the print-only header/footer blocks below are divs, which the
 	// HTML->XLSX reader drops into column A as plain cells (blowing that column's
@@ -127,6 +127,8 @@ th{ font-size: 9px; }
 				<th>Pay Day</th>
 				<th>Absent Day</th>
 				<th>Absent Amt TK</th>
+				<th title="Every {{ config('hr.late_days_per_deduction', 3) }} late days = 1 day deduction">Late Day</th>
+				<th>Late Amt TK</th>
 				<th>Att: Bonus</th>
 				<th>Other Alowance</th>
 				<th>Total Salary</th>
@@ -186,6 +188,8 @@ th{ font-size: 9px; }
 						<td class="tc">{{ $row['sfl_pay_day'] }}</td>
 						<td class="tc">{{ $row['sfl_ab'] }}</td>
 						<td class="tr">{{ number_format($row['sfl_deduct_absent']) }}</td>
+						<td class="tc">{{ $row['late_days'] }}@if($row['late_deduct_days'])<br><small>(-{{ $row['late_deduct_days'] }}d)</small>@endif</td>
+						<td class="tr">{{ number_format($row['deduct_late']) }}</td>
 						<td class="tr">{{ number_format($row['att_bonus']) }}</td>
 						<td class="tr">{{ number_format($row['extra_facility']) }}</td>
 						<td class="tr"><strong>{{ number_format($row['sfl_total']) }}</strong></td>
@@ -220,6 +224,8 @@ th{ font-size: 9px; }
 					<td class="tc">{{ $group['totals']['sfl_pay_day'] }}</td>
 					<td class="tc">{{ $group['totals']['sfl_ab'] }}</td>
 					<td class="tr">{{ number_format($group['totals']['sfl_deduct_absent']) }}</td>
+					<td class="tc">{{ $group['totals']['late_days'] }}</td>
+					<td class="tr">{{ number_format($group['totals']['deduct_late']) }}</td>
 					<td class="tr">{{ number_format($group['totals']['att_bonus']) }}</td>
 					<td class="tr">{{ number_format($group['totals']['extra_facility']) }}</td>
 					<td class="tr">{{ number_format($group['totals']['sfl_total']) }}</td>
@@ -252,6 +258,8 @@ th{ font-size: 9px; }
 				<td class="tc">{{ $grand['sfl_pay_day'] }}</td>
 				<td class="tc">{{ $grand['sfl_ab'] }}</td>
 				<td class="tr">{{ number_format($grand['sfl_deduct_absent']) }}</td>
+				<td class="tc">{{ $grand['late_days'] }}</td>
+				<td class="tr">{{ number_format($grand['deduct_late']) }}</td>
 				<td class="tr">{{ number_format($grand['att_bonus']) }}</td>
 				<td class="tr">{{ number_format($grand['extra_facility']) }}</td>
 				<td class="tr">{{ number_format($grand['sfl_total']) }}</td>

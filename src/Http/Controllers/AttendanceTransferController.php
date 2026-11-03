@@ -53,6 +53,10 @@ class AttendanceTransferController extends Controller
             ->whereIn('a.employee_id', $employeeIds)
             ->whereBetween('a.date', [$from, $to])
             ->when($request->input('status'), fn ($q, $status) => $q->where('a.status', $status))
+            ->when(AttendanceController::SOURCE_VIA[(string) $request->input('source')] ?? null, function ($q, $via) {
+                $q->where(fn ($w) => $w->whereIn('a.via', $via)->when(in_array('', $via, true), fn ($n) => $n->orWhereNull('a.via')))
+                  ->where(fn ($w) => $w->whereNotNull('a.in_time')->orWhereNotNull('a.out_time'));
+            })
             ->select([
                 'a.date', 'a.in_time', 'a.out_time', 'a.status', 'a.total_working_minute', 'a.total_ot_minute', 'a.remarks', 'a.via',
                 'e.employee_id as employee_code', 'e.name as employee_name', 'd.name as department', 's.name as section',
@@ -258,7 +262,7 @@ class AttendanceTransferController extends Controller
                 if (isset($header['remarks'])) {
                     $attendance->remarks = $get($cells, 'remarks') ?: null;
                 }
-                if (!$existing) {
+                if (AttendanceController::timesChanged($attendance)) {
                     $attendance->via = 'import';
                 }
 

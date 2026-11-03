@@ -4,69 +4,101 @@
 
 @push('css')
 <style>
-@page { size: A4 landscape; margin: 8mm; }
-.mas-wrap { font-size: 9px; }
-.report-head { text-align: center; margin-bottom: 10px; }
-.report-head h3 { margin: 0 0 2px; font-size: 15px; }
-.report-head p { margin: 0; font-size: 11px; }
-.sub-title { font-size: 12px; font-weight: 700; margin: 8px 0 4px; }
+@page { size: A4 landscape; margin: 6mm; }
+.mas-wrap { font-family: Arial, Helvetica, sans-serif; color: #222; }
+.mas-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 10px; }
+.mas-top .mas-title { font-size: 12px; }
+.mas-top .mas-days { font-size: 11px; color: #555; }
+.mas-legend { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.mas-legend span { font-size: 9px; font-weight: 600; padding: 3px 10px; border-radius: 3px; }
+.lg-P { background: #d4edda; color: #28a745; }
+.lg-A { background: #f8d7da; color: #dc3545; }
+.lg-LT { background: #fff3cd; color: #e0a800; }
+.lg-LV { background: #e7d6f7; color: #8e44ad; }
+.lg-H { background: #d1ecf1; color: #17a2b8; }
+.lg-I { background: #d6d6d6; color: #333; }
+
 .mas-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.mas-table th, .mas-table td { border: 1px solid #a6a6a6; padding: 1px 0; font-size: 8px; line-height: 1.3; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: clip; }
-.mas-table .t-left { padding: 1px 2px; text-overflow: ellipsis; }
-.mas-table thead th { background: #eef1d4; font-weight: 700; }
-.mas-table thead th.is-holiday { background: #ffd966; }
-.mas-table .t-left { text-align: left; }
-.mas-table .col-id { width: 52px; }
-.mas-table .col-name { width: 88px; }
-.mas-table .col-dept { width: 58px; }
-.mas-table .col-desig { width: 62px; }
-.mas-table .col-join { width: 44px; }
-.mas-table .col-total { width: 27px; font-weight: 700; }
-.mas-table .group-row td { background: #dde6f0; font-weight: 700; text-align: left; font-size: 9px; padding: 2px 6px; }
-.mas-table td.code-A { color: #c00000; font-weight: 700; }
-.mas-legend { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 9px; }
-.mas-legend span.sw { display: inline-block; min-width: 22px; text-align: center; border: 1px solid #a6a6a6; margin-right: 3px; font-weight: 700; }
-@media print { .mas-table th, .mas-table td, .mas-legend span.sw { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+.mas-table th, .mas-table td { border: 1px solid #dcdcdc; text-align: center; white-space: nowrap; overflow: hidden; }
+.mas-table thead th { background: #1f3f99 !important; color: #fff !important; font-weight: 700; border-color: #3553ad !important; }
+.mas-table thead .d-num { font-size: 8px; line-height: 1.1; padding: 3px 0 1px; }
+.mas-table thead .d-num small { display: block; font-size: 6px; font-weight: 400; }
+.mas-table thead .d-dow { font-size: 7px; padding: 1px 0; }
+.mas-table thead .h-emp { text-align: left; padding: 4px; font-size: 11px; vertical-align: bottom; width: 210px; }
+.mas-table thead .h-total { font-size: 10px; width: 24px; }
+.mas-table td { height: 34px; font-size: 7px; font-weight: 600; }
+.mas-table td.emp { text-align: left; padding: 3px 4px; }
+.emp-box { display: flex; align-items: center; gap: 6px; }
+.emp-box img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex: 0 0 22px; }
+.emp-box b { display: block; font-size: 9px; overflow: hidden; text-overflow: ellipsis; }
+.emp-box small { display: block; font-size: 7px; font-weight: 400; color: #777; margin-top: 2px; }
+
+.c-P { background: #d4edda; color: #28a745; }
+.c-A { background: #f8d7da; color: #dc3545; }
+.c-LT { background: #fff3cd; color: #e0a800; }
+.c-LV { background: #e7d6f7; color: #8e44ad; }
+.c-H { background: #fff; color: #17a2b8; }
+.c-I { background: #d6d6d6; color: #333; }
+.c-X { background: #f2f2f2; }
+
+.t-P { color: #28a745; } .t-A { color: #dc3545; } .t-LT { color: #e0a800; }
+.t-LV { color: #8e44ad; } .t-H { color: #17a2b8; } .t-I { color: #222; }
+.mas-table td.tot { font-size: 9px; font-weight: 700; background: #fff; }
+.mas-table .group-row td { background: #eef2fb; font-weight: 700; text-align: left; font-size: 9px; padding: 3px 6px; height: auto; color: #1f3f99; }
+@media print { .mas-table th, .mas-table td, .mas-legend span { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
 @endpush
 
 @section('contents')
 @php
     $days = $sheet['days'];
-    $totalCols = count(\ME\Hr\Services\MonthlyAttendanceSheetService::TOTALS);
-    $colspan = 5 + count($days) + $totalCols;
-    $bg = fn (string $code) => ($color = $sheetService->color($code)) ? 'background:#' . $color . ';' : '';
+    $first = $days ? \Illuminate\Support\Carbon::parse($days[0]['date']) : null;
+    $last = $days ? \Illuminate\Support\Carbon::parse(end($days)['date']) : null;
+    $totalKeys = ['P' => 'P', 'A' => 'A', 'LT' => 'LT', 'LV' => 'LV', 'H' => 'H', 'I' => 'I'];
+    $colspan = 1 + count($days) + count($totalKeys);
+
+    // Sheet codes -> the six display categories of this layout.
+    $display = function (string $code): array {
+        return match (true) {
+            $code === '' => ['X', ''],
+            in_array($code, ['P', 'EO'], true) => ['P', 'P'],
+            $code === 'L' => ['LT', 'L'],
+            $code === 'A' => ['A', 'A'],
+            in_array($code, ['W', 'H', 'FH'], true) => ['H', 'H'],
+            $code === 'PM' => ['I', 'I'],
+            default => ['LV', 'L'],   // any leave type
+        };
+    };
 @endphp
 
 <div class="mas-wrap">
-    <div class="report-head">
-        @if(!blank(optional(general())->logo()))
-            <img src="{{ asset(optional(general())->logo()) }}" alt="Logo" style="max-height:40px;margin-bottom:4px;">
-        @endif
-        <h3>{{ $meta['company'] }}</h3>
-        <p>{{ $meta['address'] }}</p>
+    <div class="mas-top">
+        <div class="mas-title">Attendance: {{ $first?->format('d M Y') }} to {{ $last?->format('d M Y') }}</div>
+        <div class="mas-legend">
+            <span class="lg-P">P = Present</span>
+            <span class="lg-A">A = Absent</span>
+            <span class="lg-LT">L = Late</span>
+            <span class="lg-LV">L = Leave</span>
+            <span class="lg-H">H = Holiday/Weekly Off</span>
+            <span class="lg-I">I = Incomplete</span>
+        </div>
+        <div class="mas-days">Total Days: {{ count($days) }}</div>
     </div>
-
-    <div class="sub-title">{{ $meta['title'] }} &mdash; {{ $meta['period'] }}</div>
 
     <table class="mas-table">
         <thead>
             <tr>
-                <th class="col-id" rowspan="2">Employee ID</th>
-                <th class="col-name" rowspan="2">Name</th>
-                <th class="col-dept" rowspan="2">Department</th>
-                <th class="col-desig" rowspan="2">Designation</th>
-                <th class="col-join" rowspan="2">Join Date</th>
+                <th class="h-emp" rowspan="2">Employee</th>
                 @foreach($days as $day)
-                    <th class="day {{ $day['holiday'] ? 'is-holiday' : '' }}">{{ $day['day'] }}</th>
+                    <th class="d-num">{{ $day['day'] }}<small>{{ \Illuminate\Support\Carbon::parse($day['date'])->format('M') }}</small></th>
                 @endforeach
-                @foreach(\ME\Hr\Services\MonthlyAttendanceSheetService::TOTALS_SHORT as $key => $heading)
-                    <th class="col-total" rowspan="2" title="{{ \ME\Hr\Services\MonthlyAttendanceSheetService::TOTALS[$key] }}">{{ $heading }}</th>
+                @foreach($totalKeys as $label)
+                    <th class="h-total" rowspan="2">{{ $label }}</th>
                 @endforeach
             </tr>
             <tr>
                 @foreach($days as $day)
-                    <th class="day {{ $day['holiday'] ? 'is-holiday' : '' }}">{{ substr($day['dow'], 0, 2) }}</th>
+                    <th class="d-dow">{{ substr($day['dow'], 0, 2) }}</th>
                 @endforeach
             </tr>
         </thead>
@@ -76,19 +108,29 @@
                     <tr class="group-row"><td colspan="{{ $colspan }}">{{ $group['label'] }}</td></tr>
                 @endif
                 @foreach($group['employees'] as $employee)
-                    @php $data = $sheet['rows'][$employee->id] ?? ['codes' => [], 'totals' => []]; @endphp
+                    @php
+                        $codes = $sheet['rows'][$employee->id]['codes'] ?? [];
+                        $counts = array_fill_keys(array_keys($totalKeys), 0);
+                    @endphp
                     <tr>
-                        <td>{{ $employee->employee_id }}</td>
-                        <td class="t-left" title="{{ $employee->name }}">{{ $employee->name }}</td>
-                        <td class="t-left" title="{{ optional($employee->department)->name }}">{{ optional($employee->department)->name ?? 'N/A' }}</td>
-                        <td class="t-left" title="{{ optional($employee->designation)->name }}">{{ optional($employee->designation)->name ?? 'N/A' }}</td>
-                        <td>{{ $employee->joining_date ? $employee->joining_date->format('d-M-y') : '-' }}</td>
+                        <td class="emp">
+                            <div class="emp-box">
+                                <img src="{{ asset($employee->image('sm')) }}" alt="">
+                                <div style="min-width:0;">
+                                    <b title="{{ $employee->name }}">{{ $employee->name }}</b>
+                                    <small>{{ $employee->employee_id }}</small>
+                                </div>
+                            </div>
+                        </td>
                         @foreach($days as $day)
-                            @php $code = $data['codes'][$day['date']] ?? ''; @endphp
-                            <td class="code-{{ $code }}" style="{{ $bg($code) }}">{{ $code }}</td>
+                            @php
+                                [$cat, $letter] = $display($codes[$day['date']] ?? '');
+                                if (isset($counts[$cat])) { $counts[$cat]++; }
+                            @endphp
+                            <td class="c-{{ $cat }}">{{ $letter }}</td>
                         @endforeach
-                        @foreach(array_keys(\ME\Hr\Services\MonthlyAttendanceSheetService::TOTALS) as $key)
-                            <td class="col-total">{{ $data['totals'][$key] ?? 0 }}</td>
+                        @foreach($counts as $key => $count)
+                            <td class="tot t-{{ $key }}">{{ $count }}</td>
                         @endforeach
                     </tr>
                 @endforeach
@@ -97,13 +139,5 @@
             @endforelse
         </tbody>
     </table>
-
-    <div class="mas-legend">
-        <b>Legend:</b>
-        @foreach($legend as $code => $label)
-            <div><span class="sw" style="{{ $bg($code) }}">{{ $code }}</span>{{ $label }}</div>
-        @endforeach
-        <div><span class="sw" style="{{ $bg('') }}">&nbsp;</span>Before joining / after exit / future date</div>
-    </div>
 </div>
 @endsection

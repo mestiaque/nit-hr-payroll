@@ -36,6 +36,10 @@ return [
      | Leave null to disable the machine API endpoints.
      */
     'machine_api_token' => env('HR_MACHINE_API_TOKEN'),
+
+    // Every N late days in a salary period are deducted as 1 day's salary (same
+    // day-rate as an absent day). 0 disables the rule.
+    'late_days_per_deduction' => (int) env('HR_LATE_DAYS_PER_DEDUCTION', 3),
     'legacy_links' => [
         [
             'title' => 'Employee Type',

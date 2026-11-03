@@ -78,6 +78,43 @@
                     @endif
                 </button>
             </form>
+
+            @if($today && ($today->latitude || $today->out_latitude))
+                @php
+                    $points = [];
+                    if ($today->latitude) {
+                        $points['in'] = ['label' => 'Check-in', 'color' => '#28a745', 'lat' => $today->latitude, 'lng' => $today->longitude,
+                            'time' => $today->in_time ? \Carbon\Carbon::parse($today->in_time)->format('h:i A') : ''];
+                    }
+                    if ($today->out_latitude) {
+                        $points['out'] = ['label' => 'Check-out', 'color' => '#dc3545', 'lat' => $today->out_latitude, 'lng' => $today->out_longitude,
+                            'time' => $today->out_time ? \Carbon\Carbon::parse($today->out_time)->format('h:i A') : ''];
+                    }
+                    $active = array_key_first($points);
+                @endphp
+                <style>
+                    .punch-map-btn { border:1px solid var(--c); color:var(--c); background:#fff; }
+                    .punch-map-btn.is-active { background:var(--c); color:#fff; }
+                </style>
+                <div style="margin-top:14px;">
+                    <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
+                        @foreach($points as $key => $p)
+                            <button type="button" class="btn btn-sm punch-map-btn js-punch-map {{ $key === $active ? 'is-active' : '' }}"
+                                style="--c:{{ $p['color'] }};" data-lat="{{ $p['lat'] }}" data-lng="{{ $p['lng'] }}"
+                                data-label="{{ $p['label'] }}" data-time="{{ $p['time'] }}" data-color="{{ $p['color'] }}">
+                                <i class="fa-solid fa-location-dot"></i> {{ $p['label'] }} location
+                            </button>
+                        @endforeach
+                    </div>
+                    <div id="punch-map-caption" style="font-size:13px; font-weight:600; margin-bottom:6px; color:{{ $points[$active]['color'] }};">
+                        <i class="fa-solid fa-location-dot"></i>
+                        Showing: <span>{{ $points[$active]['label'] }} location{{ $points[$active]['time'] ? ' · ' . $points[$active]['time'] : '' }}</span>
+                    </div>
+                    <iframe id="punch-map" src="https://maps.google.com/maps?q={{ $points[$active]['lat'] }},{{ $points[$active]['lng'] }}&z=17&output=embed"
+                        style="width:100%; height:220px; border:2px solid {{ $points[$active]['color'] }}; border-radius:8px;" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+                    <a id="punch-map-link" href="https://www.google.com/maps/search/?api=1&query={{ $points[$active]['lat'] }},{{ $points[$active]['lng'] }}" target="_blank" rel="noopener" style="font-size:12px;">Open in Google Maps</a>
+                </div>
+            @endif
         </div>
 
         <div class="card">
@@ -215,14 +252,38 @@ document.getElementById('punch-form').addEventListener('submit', function (e) {
         return;
     }
 
+    var originalLabel = btn.dataset.label;
     navigator.geolocation.getCurrentPosition(function (position) {
-        document.getElementById('punch-lat').value = position.coords.latitude;
-        document.getElementById('punch-lng').value = position.coords.longitude;
+        document.getElementById('punch-lat').value = position.coords.latitude.toFixed(7);
+        document.getElementById('punch-lng').value = position.coords.longitude.toFixed(7);
         form.submit();
-    }, function () {
-        alert('Location permission is required to punch attendance.');
+    }, function (error) {
+        var messages = {
+            1: 'Location permission is required to punch attendance. Please allow location access and try again.',
+            2: 'Your location could not be found. Please turn on GPS / location and try again.',
+            3: 'Getting your location took too long. Please try again.'
+        };
+        alert(messages[error.code] || 'Could not get your location.');
         btn.disabled = false;
-        btn.textContent = 'CLICK';
+        btn.innerHTML = originalLabel;
+    }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+});
+
+document.addEventListener('DOMContentLoaded', function () {
+    var b = document.getElementById('punch-btn');
+    if (b) b.dataset.label = b.innerHTML;
+});
+document.querySelectorAll('.js-punch-map').forEach(function (b) {
+    b.addEventListener('click', function () {
+        var d = this.dataset, q = d.lat + ',' + d.lng;
+        var frame = document.getElementById('punch-map');
+        frame.src = 'https://maps.google.com/maps?q=' + q + '&z=17&output=embed';
+        frame.style.borderColor = d.color;
+        document.getElementById('punch-map-link').href = 'https://www.google.com/maps/search/?api=1&query=' + q;
+        var caption = document.getElementById('punch-map-caption');
+        caption.style.color = d.color;
+        caption.querySelector('span').textContent = d.label + ' location' + (d.time ? ' · ' + d.time : '');
+        document.querySelectorAll('.js-punch-map').forEach(function (x) { x.classList.toggle('is-active', x === b); });
     });
 });
 </script>

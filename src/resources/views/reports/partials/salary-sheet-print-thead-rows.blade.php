@@ -12,9 +12,10 @@
 	<th rowspan="2">Present</th>
 	<th colspan="{{ $leaveCols }}">Leave</th>
 	<th rowspan="2">Absent</th>
+	<th rowspan="2" title="Late days (every {{ config('hr.late_days_per_deduction', 3) }} late = 1 day deduction)">Late<br>Days</th>
 	<th rowspan="2">Earn<br>Days</th>
 	<th rowspan="2">Att.<br>Bonus</th>
-	<th colspan="4">Deduction</th>
+	<th colspan="5">Deduction</th>
 	<th rowspan="2">Others<br>Deduct.</th>
 	<th colspan="2">WP &amp; HP</th>
 	<th rowspan="2">Others<br>Earning</th>
@@ -38,6 +39,7 @@
 		<th>{{ $li->code }}</th>
 	@endforeach
 	<th>Absent<br>Amt</th>
+	<th>Late<br>Amt</th>
 	<th>Adv<br>Amt</th>
 	<th>Tax</th>
 	<th>Stamp</th>

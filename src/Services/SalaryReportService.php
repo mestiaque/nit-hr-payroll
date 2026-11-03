@@ -22,6 +22,17 @@ class SalaryReportService
     }
 
     /**
+     * Days of salary to deduct for late attendance: one day per every
+     * config('hr.late_days_per_deduction') late days (default 3; 0 = rule off).
+     */
+    public static function lateDeductionDays(int $lateDays): int
+    {
+        $per = (int) config('hr.late_days_per_deduction', 3);
+
+        return $per > 0 ? intdiv(max(0, $lateDays), $per) : 0;
+    }
+
+    /**
      * Get all salary-related data for a single employee for a date range.
      *
      * Pass $employeeDataFn (from HrOptionsService::getOptionsForEmployee()) so the
@@ -88,6 +99,12 @@ class SalaryReportService
         // the same date.
         $present = (int) ($summary['totalAttendance'] ?? 0);
         $absent  = (int) ($summary['totalAbsent'] ?? 0);
+
+        // Late-and-early-exit / late-and-punch-missing days are late days too.
+        $lateDays = (int) ($summary['totalLate'] ?? 0)
+            + (int) ($summary['totalLEO'] ?? 0)
+            + (int) ($summary['totalLPM'] ?? 0);
+        $lateDeductDays = self::lateDeductionDays($lateDays);
 
         $leaveDays          = (int) ($summary['totalLeave'] ?? 0);
         $hasNoAbsentOrLeave = $absent === 0 && $leaveDays === 0;
@@ -216,6 +233,8 @@ class SalaryReportService
             'ot_rate'              => $otRate,
             'present'              => $present,
             'absent'               => $absent,
+            'late_days'            => $lateDays,
+            'late_deduct_days'     => $lateDeductDays,
             'leave'                => $leaveDays,
             'wh'                   => (int) ($leave['weekly']   ?? 0),
             'fh'                   => (int) ($leave['festival'] ?? 0),
@@ -280,8 +299,10 @@ class SalaryReportService
                     // employee with absent days is never summed as paid in full.
                     $absentBase   = self::complianceBase($factoryNo, (float) $sd['basic'], (float) $sd['gross']);
                     $deductAbsent = $absentDays > 0 ? round(($absentBase / $deductionMonthDays) * $absentDays, 2) : 0;
+                    $lateDeductDays = (int) ($sd['late_deduct_days'] ?? self::lateDeductionDays((int) ($sd['late_days'] ?? 0)));
+                    $deductLate   = $lateDeductDays > 0 ? round(($absentBase / $deductionMonthDays) * $lateDeductDays, 2) : 0;
 
-                    $deductAmount = (float) ($sd['total_deduct'] ?? 0) + $deductAbsent;
+                    $deductAmount = (float) ($sd['total_deduct'] ?? 0) + $deductAbsent + $deductLate;
                     $netAmount    = max(0, (float) ($sd['gross'] ?? 0) + (float) ($sd['total_earn'] ?? 0) - $deductAmount);
 
                     $row['basic'] += $sd['basic'];
@@ -571,7 +592,8 @@ class SalaryReportService
             'emp' => 0, 'basic' => 0, 'house' => 0, 'medical' => 0,
             'transport' => 0, 'food' => 0, 'salary_total' => 0,
             'pr' => 0, 'wh' => 0, 'fh' => 0, 'fl' => 0, 'gl' => 0, 'ab' => 0, 'earn_days' => 0,
-            'att_bonus' => 0, 'deduct_absent' => 0, 'loan' => 0, 'tax' => 0, 'stamp' => 0,
+            'att_bonus' => 0, 'deduct_absent' => 0, 'late_days' => 0, 'late_deduct_days' => 0, 'deduct_late' => 0,
+            'loan' => 0, 'tax' => 0, 'stamp' => 0,
             'deduct_other' => 0, 'wph_days' => 0, 'wph_amount' => 0,
             'other_earn' => 0, 'gross' => 0, 'payable' => 0,
             'ot_hours' => 0, 'ot_rate' => 0, 'ot_total' => 0,
@@ -649,7 +671,9 @@ class SalaryReportService
                         : $employedDaysInPeriod;
 
                     $effectiveDays = min($elapsedMonthDays, $normalizedEmployedDays, $deductionMonthDays);
-                    $earnDays = max(0, $effectiveDays - $unpaidDays);
+                    $lateDays = (int) ($sd['late_days'] ?? 0);
+                    $lateDeductDays = (int) ($sd['late_deduct_days'] ?? self::lateDeductionDays($lateDays));
+                    $earnDays = max(0, $effectiveDays - $unpaidDays - $lateDeductDays);
 
                     // Attendance Bonus requires a genuinely full, completed month for this
                     // employee — a partial view (still-in-progress period, or a mid-period
@@ -671,6 +695,8 @@ class SalaryReportService
                     $absentBase   = self::complianceBase($factoryNo, (float) $sd['basic'], (float) $sd['gross']);
                     $absentPerDay = $deductionMonthDays > 0 ? ($absentBase / $deductionMonthDays) : 0;
                     $deductAbsent = $unpaidDays > 0 ? round($absentPerDay * $unpaidDays, 2) : 0;
+                    // Late rule: every N late days = 1 day's deduction, same day-rate.
+                    $deductLate   = $lateDeductDays > 0 ? round($absentPerDay * $lateDeductDays, 2) : 0;
 
                     $salaryTotal = $sd['basic'] + $sd['house_rent'] + $sd['medical'] + $sd['transport'] + $sd['food_allow'];
 
@@ -683,8 +709,8 @@ class SalaryReportService
                     $salaryPerDay        = $deductionMonthDays > 0 ? ($salaryTotal / $deductionMonthDays) : 0;
                     $proratedSalaryTotal = round($salaryPerDay * $effectiveDays, 2);
 
-                    $payableSalary  = max(0, ($proratedSalaryTotal + $attBonus + $wphAmount + $otherEarn) - $deductAbsent);
-                    $deductionTotal = (float) ($sd['total_deduct'] ?? 0) + $deductAbsent;
+                    $payableSalary  = max(0, ($proratedSalaryTotal + $attBonus + $wphAmount + $otherEarn) - $deductAbsent - $deductLate);
+                    $deductionTotal = (float) ($sd['total_deduct'] ?? 0) + $deductAbsent + $deductLate;
                     $netSalary      = max(0, $payableSalary + $otAmount + $extraFacility - ($loan + $tax + $stamp + $deductOther));
 
                     // SFL-layout-only figures (Salary Sheet print): Total Salary = Gross -
@@ -713,9 +739,9 @@ class SalaryReportService
                     $sflProratedGross = $totalMonthDays > 0
                         ? round($sd['gross'] * $employedDaysInPeriod / $totalMonthDays, 2)
                         : $sd['gross'];
-                    $sflPayDay        = max(0, $employedDaysInPeriod - $sflUnpaidDays);
+                    $sflPayDay        = max(0, $employedDaysInPeriod - $sflUnpaidDays - $lateDeductDays);
                     $sflDeductAbsent  = $sflUnpaidDays > 0 ? round($absentPerDay * $sflUnpaidDays, 2) : 0;
-                    $sflTotalSalary   = max(0, $sflProratedGross - $sflDeductAbsent + $attBonus + $extraFacility);
+                    $sflTotalSalary   = max(0, $sflProratedGross - $sflDeductAbsent - $deductLate + $attBonus + $extraFacility);
                     $sflNetSalary     = $sflTotalSalary + $otAmount;
                     $sflPayable     = max(0, $sflNetSalary - $loan - $stamp);
 
@@ -739,6 +765,9 @@ class SalaryReportService
                         'earn_days' => $earnDays,
                         'att_bonus' => $attBonus,
                         'deduct_absent' => $deductAbsent,
+                        'late_days' => $lateDays,
+                        'late_deduct_days' => $lateDeductDays,
+                        'deduct_late' => $deductLate,
                         'loan' => $loan,
                         'tax' => $tax,
                         'stamp' => $stamp,

@@ -53,7 +53,7 @@
 	$company = hr_factory('name') ?? 'Company Name';
 	$address = hr_factory('address') ?? '';
 	$leaveCols = 3 + $leaveInfos->count();
-	$totalCols = ($withPicture ? 37 : 36) + $leaveInfos->count();
+	$totalCols = ($withPicture ? 39 : 38) + $leaveInfos->count();
 @endphp
 
 <div class="rpt-header">
@@ -146,10 +146,12 @@
 						@endforeach
 
 						<td class="tc">{{ $row['ab'] }}</td>
+						<td class="tc">{{ $row['late_days'] }}@if($row['late_deduct_days'])<br><small>(-{{ $row['late_deduct_days'] }}d)</small>@endif</td>
 						<td class="tc">{{ $row['earn_days'] }}</td>
 
 						<td class="tr">{{ number_format($row['att_bonus']) }}</td>
 						<td class="tr">{{ number_format($row['deduct_absent']) }}</td>
+						<td class="tr">{{ number_format($row['deduct_late']) }}</td>
 						<td class="tr">{{ number_format($row['loan']) }}</td>
 						<td class="tr">{{ number_format($row['tax']) }}</td>
 						<td class="tr">{{ number_format($row['stamp']) }}</td>
@@ -189,9 +191,11 @@
 						<td class="tc">{{ $group['totals']['leave_' . strtoupper($li->code)] ?? 0 }}</td>
 					@endforeach
 					<td class="tc">{{ $group['totals']['ab'] }}</td>
+					<td class="tc">{{ $group['totals']['late_days'] }}</td>
 					<td class="tc">{{ $group['totals']['earn_days'] }}</td>
 					<td class="tr">{{ number_format($group['totals']['att_bonus']) }}</td>
 					<td class="tr">{{ number_format($group['totals']['deduct_absent']) }}</td>
+					<td class="tr">{{ number_format($group['totals']['deduct_late']) }}</td>
 					<td class="tr">{{ number_format($group['totals']['loan']) }}</td>
 					<td class="tr">{{ number_format($group['totals']['tax']) }}</td>
 					<td class="tr">{{ number_format($group['totals']['stamp']) }}</td>
@@ -234,9 +238,11 @@
 					<td class="tc">{{ $grand['leave_' . strtoupper($li->code)] ?? 0 }}</td>
 				@endforeach
 				<td class="tc">{{ $grand['ab'] }}</td>
+				<td class="tc">{{ $grand['late_days'] }}</td>
 				<td class="tc">{{ $grand['earn_days'] }}</td>
 				<td class="tr">{{ number_format($grand['att_bonus']) }}</td>
 				<td class="tr">{{ number_format($grand['deduct_absent']) }}</td>
+				<td class="tr">{{ number_format($grand['deduct_late']) }}</td>
 				<td class="tr">{{ number_format($grand['loan']) }}</td>
 				<td class="tr">{{ number_format($grand['tax']) }}</td>
 				<td class="tr">{{ number_format($grand['stamp']) }}</td>

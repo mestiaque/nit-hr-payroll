@@ -20,6 +20,9 @@ use ME\Hr\Services\EmployeeAttendanceService;
 
 class AttendanceMachineController extends Controller
 {
+    // Source recorded for punches pushed by ZKTime Sync (/data, /bulk) when none is sent
+    private const PUSH_SOURCE = 'zktime_sync';
+
     public function fetchEmployees(): JsonResponse
     {
         $employees = HrEmployee::where('status', true)
@@ -48,12 +51,13 @@ class AttendanceMachineController extends Controller
             $sn         = $request->input('device_sn');
             $verifyType = $request->input('type_name');
             $typeCode   = $request->input('type_code');
+            $source     = $request->input('source') ?: self::PUSH_SOURCE;
 
             if (!$userId || !$timestamp) {
                 return response()->json(['status' => 'error', 'message' => 'Invalid Data'], 400);
             }
 
-            $this->saveMachineLog($userId, $timestamp, $sn, $verifyType, $typeCode);
+            $this->saveMachineLog($userId, $timestamp, $sn, $verifyType, $typeCode, $source);
             $this->saveAttendance($userId, $timestamp, $sn, $verifyType);
 
             return response()->json(['status' => 'success', 'message' => 'Attendance Processed']);
@@ -78,9 +82,10 @@ class AttendanceMachineController extends Controller
                 $sn         = $entry['device_sn'] ?? null;
                 $verifyType = $entry['type_name'] ?? null;
                 $typeCode   = $entry['type_code'] ?? null;
+                $source     = ($entry['source'] ?? null) ?: self::PUSH_SOURCE;
 
                 if ($userId && $timestamp) {
-                    $this->saveMachineLog($userId, $timestamp, $sn, $verifyType, $typeCode);
+                    $this->saveMachineLog($userId, $timestamp, $sn, $verifyType, $typeCode, $source);
                     $this->saveAttendance($userId, $timestamp, $sn, $verifyType);
                 }
             }
@@ -617,7 +622,7 @@ class AttendanceMachineController extends Controller
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
-    private function saveMachineLog(string $userId, string $timestamp, ?string $sn, ?string $verifyType, ?string $typeCode = null): void
+    private function saveMachineLog(string $userId, string $timestamp, ?string $sn, ?string $verifyType, ?string $typeCode = null, ?string $source = null): void
     {
         try {
             HrAttendanceMachineLog::create([
@@ -626,6 +631,8 @@ class AttendanceMachineController extends Controller
                 'log_time'    => $timestamp,
                 'type_name'   => $verifyType,
                 'type_code'   => $typeCode,
+                'source'      => $source,
+                'received_at' => now(),
             ]);
         } catch (\Throwable $e) {
             Log::error("saveMachineLog failed for $userId: " . $e->getMessage());

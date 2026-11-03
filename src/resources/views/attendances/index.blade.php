@@ -36,7 +36,7 @@
         <div class="card-header bg-white d-flex justify-content-between align-items-center">
             <h5 class="mb-0">Attendance List</h5>
             <div class="d-flex flex-wrap" style="gap:6px;">
-                @php $exportQuery = request()->only(['employee', 'department', 'section', 'sub_section', 'classification', 'designation', 'status', 'date', 'date_from', 'date_to']); @endphp
+                @php $exportQuery = request()->only(['employee', 'department', 'section', 'sub_section', 'classification', 'designation', 'status', 'source', 'date', 'date_from', 'date_to']); @endphp
                 <div class="btn-group btn-group-sm" role="group" aria-label="Export">
                     <a href="{{ route('hr-center.attendances.export', $exportQuery + ['format' => 'xlsx']) }}" class="btn btn-outline-success" title="Export the filtered attendance to Excel">
                         <i class="fa fa-file-excel mr-1"></i> Export Excel
@@ -115,6 +115,15 @@
                         </select>
                     </div>
                     <div class="col-md-2">
+                        <label class="mb-1">Source</label>
+                        <select name="source" class="form-control form-control-sm">
+                            <option value="">All</option>
+                            <option value="live" @selected(request('source') === 'live')>Live Location (Portal)</option>
+                            <option value="machine" @selected(request('source') === 'machine')>Machine</option>
+                            <option value="manual" @selected(request('source') === 'manual')>Manual / Import</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
                         <label class="mb-1">Date From</label>
                         <input type="date" name="date_from" class="form-control form-control-sm" value="{{ request('date_from', $dateFrom ?? '') }}">
                     </div>
@@ -172,7 +181,7 @@
                     <form method="POST" action="{{ route('hr-center.attendances.bulk-update', $empId) }}" class="js-att-form" data-shift-in="{{ $shift ? \Carbon\Carbon::parse($shift->start_time)->format('H:i') : '' }}" data-shift-out="{{ $shift ? \Carbon\Carbon::parse($shift->end_time)->format('H:i') : '' }}">
                         @csrf
                         {{-- Preserve filter params --}}
-                        @foreach(['employee','status','date_from','date_to','department','section','sub_section','classification','designation'] as $p)
+                        @foreach(['employee','status','source','date_from','date_to','department','section','sub_section','classification','designation'] as $p)
                             @if(is_array(request($p)))
                                 @foreach(request($p) as $v)
                                     <input type="hidden" name="{{ $p }}[]" value="{{ $v }}">
@@ -195,6 +204,7 @@
                                         <th>In Time</th>
                                         <th>Out Time</th>
                                         <th>Remarks</th>
+                                        <th>Location</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -225,7 +235,22 @@
                                             </td>
                                             <td>{{ $row['date'] }}</td>
                                             <td class="{{ $isWeekend ? 'day-weekend' : '' }}">{{ $dayName }}</td>
-                                            <td><span class="status-badge {{ $badgeClass }}">{{ $st }}</span></td>
+                                            <td>
+                                                <span class="status-badge {{ $badgeClass }}">{{ $st }}</span>
+                                                @php
+                                                    $via = (string) ($row['attendance']->via ?? '');
+                                                    $hasPunch = $row['attendance'] && ($row['attendance']->in_time || $row['attendance']->out_time);
+                                                    [$srcLabel, $srcColor] = match (true) {
+                                                        !$hasPunch => [null, null],
+                                                        $via === 'employee-portal' => ['Live', '#0d6efd'],
+                                                        in_array($via, ['machine', 'legacy-import'], true) => ['Machine', '#6f42c1'],
+                                                        default => ['Manual', '#6c757d'],
+                                                    };
+                                                @endphp
+                                                @if($srcLabel)
+                                                    <span style="font-size:10px;border:1px solid {{ $srcColor }};color:{{ $srcColor }};border-radius:10px;padding:0 6px;margin-left:4px;">{{ $srcLabel }}</span>
+                                                @endif
+                                            </td>
                                             <td>
                                                 <input type="hidden" name="rows[{{ $i }}][date]" value="{{ $row['date'] }}">
                                                 <input type="time" class="js-att-in" name="rows[{{ $i }}][in_time]" value="{{ $row['attendance']->in_time ?? '' }}">
@@ -235,6 +260,28 @@
                                             </td>
                                             <td>
                                                 <input type="text" name="rows[{{ $i }}][remarks]" value="{{ $row['attendance']->remarks ?? '' }}" placeholder="Remarks">
+                                            </td>
+                                            <td style="white-space:nowrap;">
+                                                @php $att = $row['attendance'] ?? null; @endphp
+                                                @if($att && $att->latitude && $att->longitude)
+                                                    <button type="button" class="btn btn-xs btn-outline-success js-att-map" style="padding:1px 6px;font-size:11px;"
+                                                        data-lat="{{ $att->latitude }}" data-lng="{{ $att->longitude }}"
+                                                        data-title="{{ $emp->name }} — In {{ $att->in_time ? \Carbon\Carbon::parse($att->in_time)->format('h:i A') : '' }}, {{ $row['date'] }}"
+                                                        data-address="{{ $att->in_address }}" title="Punch-in location">
+                                                        <i class="fa fa-map-marker-alt"></i> In
+                                                    </button>
+                                                @endif
+                                                @if($att && $att->out_latitude && $att->out_longitude)
+                                                    <button type="button" class="btn btn-xs btn-outline-danger js-att-map" style="padding:1px 6px;font-size:11px;"
+                                                        data-lat="{{ $att->out_latitude }}" data-lng="{{ $att->out_longitude }}"
+                                                        data-title="{{ $emp->name }} — Out {{ $att->out_time ? \Carbon\Carbon::parse($att->out_time)->format('h:i A') : '' }}, {{ $row['date'] }}"
+                                                        data-address="{{ $att->out_address }}" title="Punch-out location">
+                                                        <i class="fa fa-map-marker-alt"></i> Out
+                                                    </button>
+                                                @endif
+                                                @if(!($att && ($att->latitude || $att->out_latitude)))
+                                                    <span class="text-muted">-</span>
+                                                @endif
                                             </td>
                                         </tr>
                                     @endforeach
@@ -257,8 +304,41 @@
     </div>
 </div>
 
+
+{{-- Punch location map (Google Maps embed, no API key needed) --}}
+<div id="attMapModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:2000;align-items:center;justify-content:center;padding:16px;">
+    <div style="background:#fff;border-radius:8px;width:100%;max-width:720px;overflow:hidden;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #dee2e6;">
+            <strong id="attMapTitle" style="font-size:14px;"></strong>
+            <button type="button" id="attMapClose" class="btn btn-sm btn-light">&times;</button>
+        </div>
+        <iframe id="attMapFrame" src="about:blank" style="width:100%;height:420px;border:0;" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 14px;font-size:12px;">
+            <span id="attMapInfo" class="text-muted"></span>
+            <a id="attMapOpen" href="#" target="_blank" rel="noopener" class="btn btn-sm btn-primary">Open in Google Maps</a>
+        </div>
+    </div>
+</div>
+
 @push('js')
 <script>
+(function () {
+    var modal = document.getElementById('attMapModal');
+    var close = function () { modal.style.display = 'none'; document.getElementById('attMapFrame').src = 'about:blank'; };
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest('.js-att-map');
+        if (!btn) return;
+        var lat = btn.dataset.lat, lng = btn.dataset.lng;
+        document.getElementById('attMapTitle').textContent = btn.dataset.title;
+        document.getElementById('attMapInfo').textContent = (btn.dataset.address ? btn.dataset.address + ' · ' : '') + lat + ', ' + lng;
+        document.getElementById('attMapFrame').src = 'https://maps.google.com/maps?q=' + lat + ',' + lng + '&z=17&output=embed';
+        document.getElementById('attMapOpen').href = 'https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lng;
+        modal.style.display = 'flex';
+    });
+    document.getElementById('attMapClose').addEventListener('click', close);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+})();
+
     (function () {
         function fillRow(row, checked) {
             var inInput  = row.querySelector('.js-att-in');

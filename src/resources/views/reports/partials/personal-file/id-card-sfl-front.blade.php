@@ -344,7 +344,6 @@
         <div class="sfl-decor-shape is-navy sfl-decor-fh-navy"></div>
         <div class="sfl-decor-shape is-gold sfl-decor-fh-gold"></div>
     </div>
-
     {{-- Logo row --}}
     <div class="sfl-logo-area">
         <div class="sfl-logo-text">

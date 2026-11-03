@@ -23,6 +23,13 @@ use function redirect;
 
 class AttendanceController extends Controller
 {
+    /** Attendance-list "Source" filter => hr_attendances.via values it covers. */
+    public const SOURCE_VIA = [
+        'live'    => ['employee-portal'],
+        'machine' => ['machine', 'legacy-import'],
+        'manual'  => ['manual', 'import', ''],
+    ];
+
     public function index(Request $request)
     {
         $status = $request->input('status');
@@ -150,6 +157,22 @@ class AttendanceController extends Controller
             ));
         }
 
+        // Source filter: where the stored punch came from (Live Location = employee
+        // portal geo punch, Machine = device/ADMS/file import, Manual = edited or
+        // Excel-imported by HR). Days with no stored row have no source and drop out.
+        if ($source = $request->input('source')) {
+            $allowedVia = self::SOURCE_VIA[$source] ?? null;
+            if ($allowedVia !== null) {
+                $attendanceList = array_values(array_filter($attendanceList, function ($row) use ($allowedVia) {
+                    $att = $row['attendance'];
+                    if (!$att || (!$att->in_time && !$att->out_time)) {
+                        return false;
+                    }
+                    return in_array((string) ($att->via ?? ''), $allowedVia, true);
+                }));
+            }
+        }
+
         // For backward compatibility with view, we might still pass a single date variable (first date) but we'll change view to use row date.
         // We'll keep the variable $date as the first date or today.
         $date = $dates[0] ?? Carbon::today()->toDateString();
@@ -264,13 +287,16 @@ class AttendanceController extends Controller
         $attendance->in_time = $request->input('in_time');
         $attendance->out_time = $request->input('out_time');
         $attendance->remarks = $request->input('remarks');
+        if (self::timesChanged($attendance)) {
+            $attendance->via = 'manual';
+        }
         self::applyManualTimes($attendance, $employee, $shift);
 
         $attendance->save();
 
         // Preserve filter parameters after update
         $query = [];
-        foreach (['employee', 'status', 'date_from', 'date_to', 'department', 'section', 'sub_section', 'classification', 'designation'] as $param) {
+        foreach (['employee', 'status', 'source', 'date_from', 'date_to', 'department', 'section', 'sub_section', 'classification', 'designation'] as $param) {
             if ($request->filled($param)) {
                 $query[$param] = $request->input($param);
             }
@@ -299,13 +325,16 @@ class AttendanceController extends Controller
             $attendance->in_time  = $row['in_time']  ?: null;
             $attendance->out_time = $row['out_time'] ?: null;
             $attendance->remarks  = $row['remarks']  ?? null;
+            if (self::timesChanged($attendance)) {
+                $attendance->via = 'manual';
+            }
             self::applyManualTimes($attendance, $employee, $shift);
 
             $attendance->save();
         }
 
         $query = [];
-        foreach (['employee', 'status', 'date_from', 'date_to', 'department', 'section', 'sub_section', 'classification', 'designation'] as $param) {
+        foreach (['employee', 'status', 'source', 'date_from', 'date_to', 'department', 'section', 'sub_section', 'classification', 'designation'] as $param) {
             if ($request->filled($param)) {
                 $query[$param] = $request->input($param);
             }
@@ -316,6 +345,25 @@ class AttendanceController extends Controller
             $message .= " ({$skippedLocked} locked date(s) were skipped.)";
         }
         return redirect()->route('hr-center.attendances.index', $query)->with('success', $message);
+    }
+
+    /**
+     * True for a new row, or when in/out time actually changed (compared to the
+     * minute — the form posts "09:00" for a stored "09:00:00").
+     */
+    public static function timesChanged(HrAttendance $attendance): bool
+    {
+        if (!$attendance->exists) {
+            return true;
+        }
+        $norm = fn ($t) => $t ? \Illuminate\Support\Carbon::parse($t)->format('H:i') : null;
+        foreach (['in_time', 'out_time'] as $field) {
+            if ($norm($attendance->getOriginal($field)) !== $norm($attendance->{$field})) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
