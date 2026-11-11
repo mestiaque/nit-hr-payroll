@@ -236,6 +236,10 @@ return [
             'label' => 'Gate Pass Report',
             'permissions' => [ 'view' => 'View', 'all'  => 'All',]
         ],
+        'hr_location_tracking_report' => [
+            'label' => 'Location Tracking Report',
+            'permissions' => [ 'view' => 'View', 'all'  => 'All',]
+        ],
         'hr_asset_report' => [
             'label' => 'Asset Report',
             'permissions' => [ 'view' => 'View', 'all'  => 'All',]

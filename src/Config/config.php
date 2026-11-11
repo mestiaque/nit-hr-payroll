@@ -40,6 +40,16 @@ return [
     // Every N late days in a salary period are deducted as 1 day's salary (same
     // day-rate as an absent day). 0 disables the rule.
     'late_days_per_deduction' => (int) env('HR_LATE_DAYS_PER_DEDUCTION', 3),
+
+    // Reference point for the Location Tracking Report: punches farther than
+    // `radius` metres from it are flagged Off-site. Leave lat/lng null and the
+    // report falls back to the median of the punches it is showing.
+    'office_location' => [
+        'lat'    => env('HR_OFFICE_LAT'),
+        'lng'    => env('HR_OFFICE_LNG'),
+        'radius' => (int) env('HR_OFFICE_RADIUS', 300),
+    ],
+
     'legacy_links' => [
         [
             'title' => 'Employee Type',

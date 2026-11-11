@@ -112,7 +112,9 @@ Route::middleware($route['middleware'] ?? ['web'])
 		Route::get('/reports/ot-sheet-print', [HrReportController::class, 'otSheetReportPrint'])->name('reports.ot-sheet-print');
 		Route::get('/reports/gate-pass-report', [HrReportController::class, 'gatePassReportScreen'])->name('reports.gate-pass-report');
 		Route::get('/reports/gate-pass-report-print', [HrReportController::class, 'gatePassReportPrint'])->name('reports.gate-pass-report-print');
-		Route::get('/reports/asset-report', [HrReportController::class, 'assetReportScreen'])->name('reports.asset-report');
+		Route::get('/reports/location-tracking', [HrReportController::class, 'locationTrackingReportScreen'])->name('reports.location-tracking');
+		Route::get('/reports/location-tracking-print', [HrReportController::class, 'locationTrackingReportPrint'])->name('reports.location-tracking-print');
+		Route::get('/reports/asset-report',[HrReportController::class, 'assetReportScreen'])->name('reports.asset-report');
 		Route::get('/reports/asset-report-print', [HrReportController::class, 'assetReportPrint'])->name('reports.asset-report-print');
 		Route::get('/reports/company-asset-report', [HrCompanyAssetController::class, 'reportScreen'])->name('reports.company-asset-report');
 		Route::get('/reports/company-asset-report-print', [HrCompanyAssetController::class, 'reportPrint'])->name('reports.company-asset-report-print');

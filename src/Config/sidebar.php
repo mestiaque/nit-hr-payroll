@@ -351,6 +351,13 @@ return [
                                 'icon_color' => 'text-warning',
                                 'permission' => 'hr_gate_pass_report',
                             ],
+                            [
+                                'title'      => 'Location Tracking',
+                                'icon'       => 'fa-solid fa-arrow-right',
+                                'route'      => '/admin/hr-center/reports/location-tracking',
+                                'icon_color' => 'text-warning',
+                                'permission' => 'hr_location_tracking_report',
+                            ],
                         ],
                     ],
 

@@ -2723,6 +2723,220 @@ class HrReportController extends Controller
         ], 'gate-pass-report');
     }
 
+    public function locationTrackingReportScreen(Request $request)
+    {
+        $data = $this->locationTrackingData($request);
+
+        return view('hr::reports.location-tracking', $data + [
+            'options' => $this->employeeReportOptions(),
+            'request' => $request,
+        ]);
+    }
+
+    public function locationTrackingReportPrint(Request $request)
+    {
+        if (!$request->boolean('_render')) {
+            return view('hr::partials.report-loader-render', [
+                'request' => $request,
+            ]);
+        }
+
+        $data = $this->locationTrackingData($request);
+
+        return $this->viewOrXlsx($request, 'hr::reports.location-tracking-print', $data, 'location-tracking-report');
+    }
+
+    /**
+     * Every geo-tagged punch (portal punch-in / punch-out) in the period, one row per
+     * attendance day, plus the summary figures the screen and print views share.
+     * Distances are measured from config('hr.office_location'), or — when no office
+     * point is configured — from the median of the punch-in points being shown.
+     */
+    private function locationTrackingData(Request $request): array
+    {
+        $from = $request->input('from') ?: now()->toDateString();
+        $to   = $request->input('to')   ?: $from;
+        if ($to < $from) {
+            [$from, $to] = [$to, $from];
+        }
+
+        $employeeQuery = $this->employeeReportQuery($request);
+        $employeeIds = (clone $employeeQuery)->pluck('id');
+
+        $attendances = HrAttendance::query()
+            ->with(['employee.department', 'employee.section', 'employee.designation'])
+            ->whereIn('employee_id', $employeeIds)
+            ->whereBetween('date', [$from, $to])
+            ->where(function ($q) {
+                $q->where(function ($q2) {
+                    $q2->whereNotNull('latitude')->whereNotNull('longitude');
+                })->orWhere(function ($q2) {
+                    $q2->whereNotNull('out_latitude')->whereNotNull('out_longitude');
+                });
+            })
+            ->orderBy('date')
+            ->orderBy('in_time')
+            ->get()
+            ->filter(fn ($a) => $a->employee);
+
+        $median = function ($values) {
+            $values = $values->sort()->values();
+            $count = $values->count();
+            if ($count === 0) {
+                return null;
+            }
+            $mid = intdiv($count, 2);
+            return $count % 2 ? $values[$mid] : ($values[$mid - 1] + $values[$mid]) / 2;
+        };
+
+        $officeConfig = config('hr.office_location', []);
+        $radius = max(1, (int) ($officeConfig['radius'] ?? 300));
+        if (is_numeric($officeConfig['lat'] ?? null) && is_numeric($officeConfig['lng'] ?? null)) {
+            $base = ['lat' => (float) $officeConfig['lat'], 'lng' => (float) $officeConfig['lng'], 'estimated' => false];
+        } else {
+            $inPoints = $attendances->filter(fn ($a) => $a->latitude !== null && $a->longitude !== null);
+            $base = $inPoints->isEmpty() ? null : [
+                'lat' => (float) $median($inPoints->pluck('latitude')->map(fn ($v) => (float) $v)),
+                'lng' => (float) $median($inPoints->pluck('longitude')->map(fn ($v) => (float) $v)),
+                'estimated' => true,
+            ];
+        }
+
+        // Great-circle distance in metres.
+        $distance = function ($lat1, $lng1, $lat2, $lng2): ?int {
+            if ($lat1 === null || $lng1 === null || $lat2 === null || $lng2 === null) {
+                return null;
+            }
+            $toRad = M_PI / 180;
+            $dLat = ($lat2 - $lat1) * $toRad;
+            $dLng = ($lng2 - $lng1) * $toRad;
+            $h = sin($dLat / 2) ** 2 + cos($lat1 * $toRad) * cos($lat2 * $toRad) * sin($dLng / 2) ** 2;
+            return (int) round(2 * 6371000 * asin(min(1, sqrt($h))));
+        };
+
+        $num = fn ($v) => $v === null || $v === '' ? null : (float) $v;
+        $time = fn ($v) => $v ? Carbon::parse($v)->format('h:i A') : null;
+
+        $rows = $attendances->map(function ($att) use ($num, $time, $distance, $base, $radius) {
+            $employee = $att->employee;
+            $inLat = $num($att->latitude);
+            $inLng = $num($att->longitude);
+            $outLat = $num($att->out_latitude);
+            $outLng = $num($att->out_longitude);
+
+            $inDistance = $base ? $distance($inLat, $inLng, $base['lat'], $base['lng']) : null;
+            $outDistance = $base ? $distance($outLat, $outLng, $base['lat'], $base['lng']) : null;
+            $image = $employee->image('sm');
+
+            return [
+                'id'            => $att->id,
+                'employee_key'  => $employee->id,
+                'employee_id'   => $employee->employee_id,
+                'name'          => $employee->name,
+                'department'    => optional($employee->department)->name,
+                'section'       => optional($employee->section)->name,
+                'designation'   => optional($employee->designation)->name,
+                'mobile'        => $employee->personal_contact,
+                'image'         => preg_match('#^(https?:)?//#', $image) ? $image : asset($image),
+                'date'          => Carbon::parse($att->date)->toDateString(),
+                'date_label'    => Carbon::parse($att->date)->format('d M Y, D'),
+                'in_time'       => $time($att->in_time),
+                'out_time'      => $time($att->out_time),
+                'in_hour'       => $att->in_time ? (int) Carbon::parse($att->in_time)->format('G') : null,
+                'worked_minute' => $att->total_working_minute,
+                'status'        => $att->status,
+                'late'          => stripos((string) $att->status, 'late') !== false,
+                'via'           => $att->via,
+                'in'            => $inLat !== null && $inLng !== null ? ['lat' => $inLat, 'lng' => $inLng, 'address' => $att->in_address] : null,
+                'out'           => $outLat !== null && $outLng !== null ? ['lat' => $outLat, 'lng' => $outLng, 'address' => $att->out_address] : null,
+                'in_distance'   => $inDistance,
+                'out_distance'  => $outDistance,
+                'travel'        => $distance($inLat, $inLng, $outLat, $outLng),
+                'in_offsite'    => $inDistance !== null && $inDistance > $radius,
+                'out_offsite'   => $outDistance !== null && $outDistance > $radius,
+            ];
+        })->values();
+
+        if ($request->input('site') === 'offsite') {
+            $rows = $rows->filter(fn ($r) => $r['in_offsite'] || $r['out_offsite'])->values();
+        } elseif ($request->input('site') === 'onsite') {
+            $rows = $rows->filter(fn ($r) => !$r['in_offsite'] && !$r['out_offsite'])->values();
+        }
+
+        $inRows = $rows->filter(fn ($r) => $r['in']);
+        $outRows = $rows->filter(fn ($r) => $r['out']);
+        $punchCount = $inRows->count() + $outRows->count();
+        $offsiteCount = $rows->sum(fn ($r) => (int) $r['in_offsite'] + (int) $r['out_offsite']);
+        $totalEmployees = $employeeIds->count();
+        $trackedEmployees = $rows->pluck('employee_key')->unique()->count();
+        $inMinutes = $inRows->filter(fn ($r) => $r['in_time'])
+            ->map(fn ($r) => Carbon::parse($r['in_time'])->hour * 60 + Carbon::parse($r['in_time'])->minute);
+        $avgIn = $inMinutes->isEmpty() ? null : (int) round($inMinutes->avg());
+        $travelRows = $rows->filter(fn ($r) => $r['travel'] !== null);
+        $lastPunch = $rows->sortByDesc(fn ($r) => $r['date'] . ' ' . ($r['out_time'] ? Carbon::parse($r['out_time'])->format('H:i') : Carbon::parse($r['in_time'] ?? '00:00')->format('H:i')))->first();
+
+        $hourly = array_fill(0, 24, 0);
+        foreach ($inRows as $r) {
+            if ($r['in_hour'] !== null) {
+                $hourly[$r['in_hour']]++;
+            }
+        }
+
+        $byDepartment = $rows->groupBy(fn ($r) => $r['department'] ?: 'Unassigned')
+            ->map(fn ($group, $name) => [
+                'name'      => $name,
+                'employees' => $group->pluck('employee_key')->unique()->count(),
+                'punches'   => $group->sum(fn ($r) => ($r['in'] ? 1 : 0) + ($r['out'] ? 1 : 0)),
+                'offsite'   => $group->sum(fn ($r) => (int) $r['in_offsite'] + (int) $r['out_offsite']),
+            ])
+            ->sortByDesc('punches')
+            ->values();
+
+        $daily = collect(\Carbon\CarbonPeriod::create($from, $to))
+            ->map(function ($day) use ($rows) {
+                $dayRows = $rows->where('date', $day->toDateString());
+                return [
+                    'date'      => $day->format('d M'),
+                    'employees' => $dayRows->pluck('employee_key')->unique()->count(),
+                    'offsite'   => $dayRows->filter(fn ($r) => $r['in_offsite'] || $r['out_offsite'])->count(),
+                ];
+            })
+            ->values();
+
+        $topTravellers = $travelRows->sortByDesc('travel')->take(5)->values();
+
+        return [
+            'rows'    => $rows,
+            'base'    => $base,
+            'radius'  => $radius,
+            'from'    => $from,
+            'to'      => $to,
+            'fromLabel' => Carbon::parse($from)->format('d-M-Y'),
+            'toLabel'   => Carbon::parse($to)->format('d-M-Y'),
+            'summary' => [
+                'total_employees'   => $totalEmployees,
+                'tracked_employees' => $trackedEmployees,
+                'coverage'          => $totalEmployees ? round($trackedEmployees * 100 / $totalEmployees, 1) : 0,
+                'punches'           => $punchCount,
+                'punch_in'          => $inRows->count(),
+                'punch_out'         => $outRows->count(),
+                'missing_out'       => $rows->filter(fn ($r) => $r['in_time'] && !$r['out_time'])->count(),
+                'offsite'           => $offsiteCount,
+                'onsite'            => max(0, $punchCount - $offsiteCount),
+                'offsite_pct'       => $punchCount ? round($offsiteCount * 100 / $punchCount, 1) : 0,
+                'late'              => $rows->where('late', true)->count(),
+                'avg_in'            => $avgIn === null ? null : Carbon::today()->addMinutes($avgIn)->format('h:i A'),
+                'avg_travel'        => $travelRows->isEmpty() ? null : (int) round($travelRows->avg('travel')),
+                'max_distance'      => $base && $rows->isNotEmpty() ? $rows->map(fn ($r) => max($r['in_distance'] ?? 0, $r['out_distance'] ?? 0))->max() : null,
+                'last_punch'        => $lastPunch,
+            ],
+            'hourly'        => $hourly,
+            'byDepartment'  => $byDepartment,
+            'daily'         => $daily,
+            'topTravellers' => $topTravellers,
+        ];
+    }
+
     public function assetReportScreen(Request $request)
     {
         return view('hr::reports.asset-report', [
