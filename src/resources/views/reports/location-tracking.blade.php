@@ -309,7 +309,7 @@
                 <label><input type="checkbox" id="ltCluster" checked> Cluster markers</label>
                 <hr>
                 <label><input type="radio" name="ltTile" value="street" checked> Street</label>
-                <label><input type="radio" name="ltTile" value="satellite"> Satellite</label>
+                <label><input type="radio" name="ltTile" value="satellite"> Satellite + labels</label>
             </div>
             <div class="lt-legend">
                 <span><i style="background:var(--lt-in)"></i>In</span>
@@ -490,7 +490,12 @@
     // ---- Map ---------------------------------------------------------------
     var tiles = {
         street: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }),
-        satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles &copy; Esri' })
+        // Imagery alone carries no names, so roads and place labels are laid on top.
+        satellite: L.layerGroup([
+            L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles &copy; Esri' }),
+            L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, opacity: .7 }),
+            L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 })
+        ])
     };
     var map = L.map('ltMap', { zoomControl: true, layers: [tiles.street] }).setView(base ? [base.lat, base.lng] : [23.8103, 90.4125], base ? 14 : 11);
     L.control.scale({ imperial: false }).addTo(map);
